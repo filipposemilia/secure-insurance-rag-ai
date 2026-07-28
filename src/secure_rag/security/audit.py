@@ -30,7 +30,9 @@ class AuditRecord:
     query_length: int
     input_verdict: str
     input_rule: str
+    scope: str = "corpus"
     context_sources: list[str] = field(default_factory=list)
+    uploaded_sources: list[str] = field(default_factory=list)
     quarantined_sources: list[str] = field(default_factory=list)
     pii_masked_in_context: int = 0
     output_verdict: str = ""

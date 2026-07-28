@@ -4,6 +4,11 @@ Pensata per essere proiettata durante un colloquio: ogni risposta mostra, accant
 ha fatto il layer di sicurezza** — quali documenti sono stati recuperati per quel ruolo, quali sono
 finiti in quarantena, e il prompt effettivamente inviato al modello (già anonimizzato).
 
+Tre schede:
+  • Chat       — domande sul corpus aziendale e/o sui documenti caricati in sessione
+  • Documenti  — caricamento file con referto di sicurezza (PII rimosse, istruzioni sospette)
+  • Sicurezza  — scenari di attacco pronti e audit trail
+
 Avvio:  streamlit run app/streamlit_app.py
 """
 
@@ -23,7 +28,13 @@ from secure_rag.ingestion import CLEARANCE_LEVELS, build_documents  # noqa: E402
 from secure_rag.providers import describe_provider, probe_providers  # noqa: E402
 from secure_rag.rag import RAGResponse, SecureRAGPipeline  # noqa: E402
 from secure_rag.security.pii import PIIMasker  # noqa: E402
-from secure_rag.vectorstore import collection_size, index_documents  # noqa: E402
+from secure_rag.uploads import SUPPORTED_SUFFIXES, UploadReport, process_upload  # noqa: E402
+from secure_rag.vectorstore import (  # noqa: E402
+    add_documents,
+    collection_size,
+    index_documents,
+    reset_collection,
+)
 
 st.set_page_config(page_title="Secure Insurance RAG", page_icon="🛡️", layout="wide")
 
@@ -32,6 +43,17 @@ ROLE_LABELS = {
     "agent": "Agente di rete (polizze e perizie)",
     "management": "Direzione Sinistri (tutto, incluse circolari interne)",
 }
+
+SCOPE_LABELS = {
+    "corpus": "Corpus aziendale",
+    "uploads": "Solo documenti caricati",
+    "both": "Corpus + documenti caricati",
+}
+
+
+# ---------------------------------------------------------------------------
+# Risorse condivise
+# ---------------------------------------------------------------------------
 
 
 @st.cache_resource(show_spinner=False)
@@ -49,6 +71,11 @@ def get_provider_statuses() -> list[tuple[str, str, str, bool, str]]:
     ]
 
 
+def upload_settings(settings: Settings) -> Settings:
+    """Impostazioni puntate alla collection dei documenti caricati in sessione."""
+    return settings.with_collection(settings.upload_collection_name)
+
+
 def run_ingestion(settings: Settings) -> dict:
     masker = PIIMasker()
     documents, report = build_documents(settings, masker)
@@ -59,7 +86,6 @@ def run_ingestion(settings: Settings) -> dict:
         "entities": report.masked_entities,
         "types": report.entity_types,
         "files": report.files,
-        "vault_size": len(masker.vault),
     }
 
 
@@ -97,7 +123,7 @@ with st.sidebar:
     if settings.is_offline:
         st.info("Modalità offline: nessuna chiamata di rete, nessun token consumato.", icon="🔌")
 
-    st.subheader("Configurazione")
+    st.subheader("Accesso")
     role = st.selectbox(
         "Ruolo del richiedente",
         options=list(CLEARANCE_LEVELS),
@@ -108,11 +134,14 @@ with st.sidebar:
 
     show_prompt = st.toggle("Mostra il prompt inviato all'LLM", value=False)
 
-    st.subheader("Indice")
-    indexed = collection_size(settings)
-    st.metric("Chunk indicizzati", indexed)
+    st.subheader("Indici")
+    corpus_chunks = collection_size(settings)
+    session_chunks = collection_size(upload_settings(settings))
+    left, right = st.columns(2)
+    left.metric("Corpus", corpus_chunks)
+    right.metric("Caricati", session_chunks)
 
-    if st.button("Indicizza documenti", width="stretch", type="primary"):
+    if st.button("Indicizza corpus aziendale", width="stretch", type="primary"):
         with st.spinner("Anonimizzazione e indicizzazione in corso…"):
             st.session_state["ingestion"] = run_ingestion(settings)
         st.rerun()
@@ -132,34 +161,8 @@ with st.sidebar:
 
 
 # ---------------------------------------------------------------------------
-# Corpo principale
+# Rendering condiviso
 # ---------------------------------------------------------------------------
-
-st.title("Assistente polizze con layer di sicurezza")
-st.caption(
-    "PII masking prima dell'embedding · guardrails su input, contesto e output · "
-    "RBAC applicato al retrieval · audit trail di ogni interazione"
-)
-
-if collection_size(settings) == 0:
-    st.warning(
-        f"Nessun documento indicizzato per **{describe_provider(settings)}**. Usa "
-        "**Indicizza documenti** nella barra laterale: ogni provider ha il proprio indice, "
-        "perché i modelli di embedding producono vettori di dimensione diversa.",
-        icon="📄",
-    )
-
-with st.expander("Scenari di attacco pronti (clicca per eseguirli)"):
-    columns = st.columns(3)
-    for index, scenario in enumerate(SCENARIOS):
-        with columns[index % 3]:
-            if st.button(scenario.name, key=f"scenario_{index}", width="stretch"):
-                st.session_state["pending_question"] = scenario.question
-                st.session_state["pending_role"] = scenario.role
-                st.rerun()
-            st.caption(f"OWASP: {scenario.owasp}")
-
-st.session_state.setdefault("history", [])
 
 
 def render_response(response: RAGResponse) -> None:
@@ -170,10 +173,11 @@ def render_response(response: RAGResponse) -> None:
         st.markdown(response.answer)
 
     events = response.security_events
-    columns = st.columns(3)
+    columns = st.columns(4)
     columns[0].metric("Ruolo", ROLE_LABELS[response.role].split(" (")[0])
-    columns[1].metric("Latenza", f"{response.latency_ms} ms")
-    columns[2].metric("Eventi di sicurezza", len(events))
+    columns[1].metric("Ambito", SCOPE_LABELS.get(response.scope, response.scope))
+    columns[2].metric("Latenza", f"{response.latency_ms} ms")
+    columns[3].metric("Eventi di sicurezza", len(events))
 
     if events:
         for event in events:
@@ -187,44 +191,246 @@ def render_response(response: RAGResponse) -> None:
                 st.code(finding, language=None)
 
     if response.sources:
-        st.caption("**Fonti recuperate:** " + ", ".join(response.sources))
+        badges = [
+            f"📎 {source}" if source in response.uploaded_sources else f"📄 {source}"
+            for source in response.sources
+        ]
+        st.caption("**Fonti recuperate:** " + " · ".join(badges))
 
     if show_prompt and response.prompt_sent:
         with st.expander("Prompt inviato all'LLM (anonimizzato)"):
             st.code(response.prompt_sent, language="markdown")
 
 
-for entry in st.session_state["history"]:
+def ask(question: str, scope: str) -> None:
+    """Esegue una domanda e la registra nello storico della chat."""
     with st.chat_message("user"):
-        st.write(entry["question"])
+        st.write(question)
     with st.chat_message("assistant"):
-        render_response(entry["response"])
+        with st.spinner("Elaborazione con controlli di sicurezza…"):
+            response = get_pipeline(provider).answer(question, role=role, scope=scope)
+        render_response(response)
+    st.session_state["history"].append({"question": question, "response": response})
 
-question = st.chat_input("Fai una domanda sulle polizze…")
 
-if pending := st.session_state.pop("pending_question", None):
-    question = pending
-    role = st.session_state.pop("pending_role", role)
+st.session_state.setdefault("history", [])
+st.session_state.setdefault("upload_reports", [])
+st.session_state.setdefault("processed_uploads", set())
 
-if question:
+tab_chat, tab_docs, tab_security = st.tabs(["💬 Chat", "📎 Documenti", "🛡️ Sicurezza"])
+
+
+# ---------------------------------------------------------------------------
+# Scheda 1 — Chat
+# ---------------------------------------------------------------------------
+
+with tab_chat:
+    st.subheader("Assistente polizze")
+    st.caption(
+        "PII masking prima dell'embedding · guardrails su input, contesto e output · "
+        "RBAC applicato al retrieval · audit trail di ogni interazione"
+    )
+
+    session_chunks = collection_size(upload_settings(settings))
+    scope_options = ["corpus", "uploads", "both"] if session_chunks else ["corpus"]
+    scope = st.radio(
+        "Dove cercare",
+        options=scope_options,
+        format_func=lambda value: SCOPE_LABELS[value],
+        horizontal=True,
+        help="I documenti caricati vivono in una collection separata: non contaminano il corpus.",
+    )
+    if session_chunks == 0:
+        st.caption("Carica un documento dalla scheda **Documenti** per interrogarlo direttamente.")
+
     if collection_size(settings) == 0:
-        st.error("Indicizza prima i documenti dalla barra laterale.", icon="📄")
-    else:
-        with st.chat_message("user"):
-            st.write(question)
-        with st.chat_message("assistant"):
-            with st.spinner("Elaborazione con controlli di sicurezza…"):
-                response = get_pipeline(provider).answer(question, role=role)
-            render_response(response)
-        st.session_state["history"].append({"question": question, "response": response})
+        st.warning(
+            f"Corpus non indicizzato per **{describe_provider(settings)}**. Usa "
+            "**Indicizza corpus aziendale** nella barra laterale: ogni provider ha il proprio "
+            "indice, perché i modelli di embedding producono vettori di dimensione diversa.",
+            icon="📄",
+        )
 
-with st.expander("Audit trail (ultime interazioni)"):
-    records = get_pipeline(provider).audit.tail(10)
+    for entry in st.session_state["history"]:
+        with st.chat_message("user"):
+            st.write(entry["question"])
+        with st.chat_message("assistant"):
+            render_response(entry["response"])
+
+    question = st.chat_input("Fai una domanda sulle polizze…")
+
+    if pending := st.session_state.pop("pending_question", None):
+        question = pending
+
+    if question:
+        if collection_size(settings) == 0 and scope == "corpus":
+            st.error("Indicizza prima il corpus dalla barra laterale.", icon="📄")
+        else:
+            ask(question, scope)
+
+    if st.session_state["history"] and st.button("Svuota conversazione"):
+        st.session_state["history"] = []
+        st.rerun()
+
+
+# ---------------------------------------------------------------------------
+# Scheda 2 — Documenti caricati
+# ---------------------------------------------------------------------------
+
+
+def render_upload_report(report: UploadReport) -> None:
+    """Referto di sicurezza di un file caricato."""
+    if not report.accepted:
+        st.error(f"**{report.file_name}** — {report.error}", icon="🚫")
+        return
+
+    icon = "⚠️" if report.suspicious_chunks else "✅"
+    with st.expander(f"{icon} {report.file_name} — {report.summary}", expanded=True):
+        columns = st.columns(4)
+        columns[0].metric("Dimensione", f"{report.size_kb:.0f} KB")
+        columns[1].metric("Chunk", report.chunks)
+        columns[2].metric("PII rimosse", report.pii_count)
+        columns[3].metric("Chunk sospetti", report.suspicious_chunks)
+
+        if report.pii_types:
+            st.caption("**Tipi di dato personale rimossi:** " + ", ".join(report.pii_types))
+
+        if report.suspicious_chunks:
+            st.error(
+                f"Il documento contiene {report.suspicious_chunks} blocchi con istruzioni rivolte "
+                "all'assistente: possibile **prompt injection indiretta** (OWASP LLM01). I blocchi "
+                "restano tracciati e vengono esclusi dal contesto a ogni interrogazione.",
+                icon="🧨",
+            )
+            for finding in report.findings:
+                st.code(finding, language=None)
+
+        st.caption(f"Visibile al livello di clearance: **{report.clearance}**")
+
+        left, right = st.columns(2)
+        with left:
+            st.caption("Testo originale (resta in memoria applicativa)")
+            st.text_area(
+                "originale",
+                report.preview_original,
+                height=220,
+                disabled=True,
+                label_visibility="collapsed",
+                key=f"orig_{report.file_name}_{report.uploaded_at}",
+            )
+        with right:
+            st.caption("Testo anonimizzato (è questo che viene indicizzato e inviato all'LLM)")
+            st.text_area(
+                "anonimizzato",
+                report.preview_masked,
+                height=220,
+                disabled=True,
+                label_visibility="collapsed",
+                key=f"mask_{report.file_name}_{report.uploaded_at}",
+            )
+
+
+with tab_docs:
+    st.subheader("Documenti caricati in sessione")
+    st.markdown(
+        "Un file caricato è **input non fidato**: riceve lo stesso trattamento del corpus "
+        "aziendale — anonimizzazione PII prima dell'embedding, scansione anti prompt injection, "
+        "clearance ereditata dal ruolo attivo — più due controlli di ingresso: dimensione massima "
+        f"{settings.max_upload_mb:.0f} MB e {settings.max_upload_chunks} chunk (mitigazione LLM04)."
+    )
+
+    uploaded_files = st.file_uploader(
+        f"Formati ammessi: {', '.join(SUPPORTED_SUFFIXES)}",
+        type=[suffix.lstrip(".") for suffix in SUPPORTED_SUFFIXES],
+        accept_multiple_files=True,
+    )
+
+    if uploaded_files:
+        masker = PIIMasker()
+        nuovi = 0
+        for uploaded in uploaded_files:
+            data = uploaded.getvalue()
+            fingerprint = f"{uploaded.name}:{len(data)}:{role}"
+            if fingerprint in st.session_state["processed_uploads"]:
+                continue
+
+            with st.spinner(f"Analisi di sicurezza di {uploaded.name}…"):
+                documents, report = process_upload(
+                    uploaded.name, data, clearance=role, settings=settings, masker=masker
+                )
+                if report.accepted:
+                    add_documents(documents, upload_settings(settings))
+
+            st.session_state["processed_uploads"].add(fingerprint)
+            st.session_state["upload_reports"].append(report)
+            nuovi += 1
+
+        if nuovi:
+            st.rerun()
+
+    if st.session_state["upload_reports"]:
+        st.divider()
+        for report in reversed(st.session_state["upload_reports"]):
+            render_upload_report(report)
+
+        st.divider()
+        left, right = st.columns([3, 1])
+        with left:
+            domanda = st.text_input(
+                "Domanda mirata sui documenti caricati",
+                placeholder="Es. Qual è l'importo dell'indennizzo proposto?",
+            )
+        with right:
+            st.write("")
+            st.write("")
+            chiedi = st.button("Chiedi", width="stretch", type="primary")
+
+        if chiedi and domanda:
+            st.session_state["pending_question"] = domanda
+            st.info("Domanda inviata: apri la scheda **Chat** per vedere la risposta.", icon="💬")
+
+        if st.button("Rimuovi tutti i documenti caricati"):
+            reset_collection(upload_settings(settings))
+            st.session_state["upload_reports"] = []
+            st.session_state["processed_uploads"] = set()
+            st.rerun()
+    else:
+        st.info(
+            "Nessun documento caricato. Prova con `data/policies/perizia_sinistro_compromessa.md`: "
+            "contiene una prompt injection indiretta nascosta in un commento HTML e il referto la "
+            "segnala prima ancora della prima domanda.",
+            icon="🧪",
+        )
+
+
+# ---------------------------------------------------------------------------
+# Scheda 3 — Sicurezza
+# ---------------------------------------------------------------------------
+
+with tab_security:
+    st.subheader("Scenari di attacco")
+    st.caption("Ogni scenario è mappato su un rischio della OWASP Top 10 for LLM Applications.")
+
+    columns = st.columns(3)
+    for index, scenario in enumerate(SCENARIOS):
+        with columns[index % 3]:
+            with st.container(border=True):
+                st.markdown(f"**{scenario.name}**")
+                st.caption(f"OWASP: {scenario.owasp}")
+                st.caption(scenario.expected)
+                if st.button("Esegui", key=f"scenario_{index}", width="stretch"):
+                    st.session_state["pending_question"] = scenario.question
+                    st.info("Apri la scheda **Chat** per vedere l'esito.", icon="💬")
+
+    st.divider()
+    st.subheader("Audit trail")
+    records = get_pipeline(provider).audit.tail(15)
     if records:
         st.dataframe(records, width="stretch")
         st.caption(
             "La domanda in chiaro non viene mai registrata: nel log resta solo un hash, "
-            "insieme a ruolo, fonti consultate, documenti in quarantena e verdetti dei guard."
+            "insieme a ruolo, ambito di ricerca, fonti consultate, documenti in quarantena e "
+            "verdetti dei guard."
         )
     else:
         st.caption("Nessuna interazione registrata.")

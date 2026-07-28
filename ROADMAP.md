@@ -7,10 +7,11 @@
 | 0 | Scaffolding, ambiente `uv` su Python 3.12, governance (`CLAUDE.md`, sessioni, memorie) | ✅ |
 | 1 | Core RAG: ingestion anonimizzata, ChromaDB con RBAC, provider intercambiabili, catena LCEL, CLI | ✅ |
 | 2 | Security layer: input guard, context guard (injection indiretta), output guard, audit trail JSONL, sei scenari di attacco | ✅ |
-| 3 | UI Streamlit con selettore di ruolo, pannello sicurezza, citazioni, prompt ispezionabile | ✅ |
+| 3 | UI Streamlit a schede: chat con selettore di ambito, upload documenti con referto di sicurezza, pannello scenari e audit | ✅ |
+| 3b | Scelta interattiva del provider all'avvio (OpenAI / Ollama / offline) con rilevamento della disponibilità, indici separati per modello | ✅ |
 | 4 | Documentazione: README, architettura, modello di sicurezza con mapping OWASP, ADR | ✅ |
 
-Test: 32, tutti offline (`.venv/bin/pytest -q`).
+Test: 62, tutti offline (`.venv/bin/pytest -q`).
 
 ## Future work
 
@@ -26,6 +27,8 @@ aggiungerebbe e perché è stata esclusa.
 | **NeMo Guardrails / Guardrails AI** | Policy dichiarative su argomenti ammessi e formato delle risposte | Sovrapposto a quanto già dimostrato dai guard a regole | ~4 h |
 | **Autenticazione reale (OIDC/JWT)** | Il ruolo verificato da un identity provider invece che dichiarato | Fuori dallo scopo di un PoC senza backend | ~1 g |
 | **Rate limiting e quote per utente** | Mitigazione LLM04 (denial of service e abuso di costi) | Va a livello di API gateway, non di applicazione | ~2 h |
+| **Collection upload per sessione/utente** | In multiutente, i file caricati da uno non devono essere raggiungibili dagli altri con la stessa clearance | Oggi la collection degli upload è unica per istanza: sufficiente per una demo locale | ~2 h |
+| **Antivirus sui file caricati** | Blocca allegati malevoli oltre al payload testuale (macro, PDF con JavaScript) | Richiede un servizio esterno tipo ClamAV | ~3 h |
 
 ### Qualità del retrieval
 

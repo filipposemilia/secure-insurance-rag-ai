@@ -21,12 +21,38 @@ anagrafica, codice fiscale, IBAN, contatti, dati di sinistro.
 | **LLM01 — Prompt Injection (indiretta)** | Scansione dei chunk recuperati: istruzioni rivolte all'assistente e contenuto nascosto (commenti HTML, testo invisibile) mandano il chunk in quarantena. Il system prompt dichiara inoltre che il contesto è dato, non istruzione, ed è racchiuso in delimitatori espliciti. | `security/guardrails.py::scan_context`, `rag.py::SYSTEM_PROMPT` | Stessa fragilità delle regole. Non copre payload steganografici o in immagini. |
 | **LLM02 — Insecure Output Handling** | La risposta non viene mai eseguita né interpretata: è testo mostrato in UI. Output guard su PII. | `security/guardrails.py::validate_output` | Non c'è sanitizzazione HTML perché non esiste rendering di HTML generato dal modello. |
 | **LLM03 — Training Data Poisoning** | Non applicabile: nessun fine-tuning. È uno dei motivi per cui il RAG è preferibile in questo dominio. | — | Il corpus indicizzato **è** avvelenabile: è esattamente lo scenario coperto dal context guard. |
-| **LLM04 — Model Denial of Service** | Limite di lunghezza sulla query (`MAX_QUERY_LENGTH`), `k` di retrieval fisso. | `security/guardrails.py` | Nessun rate limiting per utente: va aggiunto a livello di API gateway. |
+| **LLM04 — Model Denial of Service** | Limite di lunghezza sulla query (`MAX_QUERY_LENGTH`), `k` di retrieval fisso, e sui file caricati un tetto di dimensione (`max_upload_mb`) e di numero di chunk (`max_upload_chunks`). | `security/guardrails.py`, `uploads.py` | Nessun rate limiting per utente: va aggiunto a livello di API gateway. |
 | **LLM06 — Sensitive Information Disclosure** | PII masking **prima** dell'embedding: nel vector store non esiste un dato personale in chiaro. RBAC sul retrieval. Output guard che blocca PII in risposta. Audit senza query in chiaro. | `security/pii.py`, `vectorstore.py`, `security/audit.py` | Il riconoscimento è a regex: nomi non introdotti da un ruolo contrattuale possono sfuggire. Presidio risolve questo punto. |
 | **LLM07 — Insecure Plugin Design** | Non applicabile: nessun tool né azione eseguibile dal modello. Il PoC è read-only per costruzione. | — | Con LangGraph e azioni di liquidazione servirebbe human-in-the-loop obbligatorio. |
 | **LLM08 — Excessive Agency** | Il modello non può compiere azioni: nessuna scrittura, nessuna approvazione, nessuna chiamata a sistemi terzi. Lo scenario 3 della demo mostra un documento che *chiede* di approvare 50.000 EUR e resta senza effetto. | Architettura | — |
 | **LLM09 — Overreliance** | Obbligo di citare la fonte, risposta forzata a "informazione non presente" quando il contesto non copre la domanda, controllo di groundedness sull'output. | `rag.py`, `guardrails.py::_is_grounded` | Il controllo di groundedness è lessicale, non semantico: è un proxy, non una garanzia. |
 | **LLM10 — Model Theft** | Non applicabile: nessun modello proprietario ospitato. | — | — |
+
+## Superficie di attacco dei documenti caricati dall'utente
+
+L'upload in chat è il punto in cui un attaccante ha il controllo più diretto sul contenuto che il
+sistema leggerà. Riceve quindi lo stesso trattamento del corpus aziendale, più tre controlli
+specifici:
+
+| Controllo | Cosa impedisce | Dove |
+| :--- | :--- | :--- |
+| Formato ammesso (`.pdf`, `.md`, `.txt`) e limite di dimensione e di chunk | Saturazione del contesto e dei costi, file eseguibili | `uploads.py::process_upload` |
+| Anonimizzazione PII **prima** dell'indicizzazione | Che i dati personali del file caricato raggiungano il provider LLM | `uploads.py`, `security/pii.py` |
+| Scansione anti-injection al momento del caricamento, con referto all'utente | Che un payload nascosto agisca prima che qualcuno se ne accorga | `uploads.py`, `security/guardrails.py::scan_context` |
+
+Due proprietà di isolamento:
+
+- i documenti caricati vanno in una **collection separata**, svuotabile, che non contamina in modo
+  permanente il corpus aziendale;
+- ereditano la **clearance del ruolo che li ha caricati**, quindi un file caricato dalla direzione
+  non diventa visibile alla rete agenziale attraverso la chat.
+
+I chunk sospetti vengono indicizzati e marcati, non scartati: il context guard li esclude comunque
+a ogni interrogazione. Così l'attacco resta visibile nell'audit trail invece di sparire in silenzio,
+e l'utente riceve una nota esplicita nella risposta.
+
+**Limite dichiarato.** La collection degli upload è unica per l'istanza: in un deployment
+multiutente andrebbe partizionata per sessione o per utente, non solo per clearance.
 
 ## Difesa in profondità: cosa succede se un layer cede
 

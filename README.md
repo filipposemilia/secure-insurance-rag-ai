@@ -19,6 +19,23 @@ audit trail ricostruibile.
 | 👤 | **RBAC sui vettori**: la stessa domanda dà risultati diversi per un agente di rete e per la direzione. | scenari 5 e 6 |
 | 📋 | **Audit trail** JSONL con hash della domanda (mai il testo), fonti, quarantene e verdetti dei guard. | `secure-rag audit` |
 | 🔌 | **Provider intercambiabile**: OpenAI, Azure OpenAI, Ollama on-premise, o `fake` per girare offline. | `.env` |
+| 📎 | **Upload di documenti in chat** con referto di sicurezza immediato: PII rimosse, confronto prima/dopo e rilevamento di istruzioni nascoste, prima ancora della prima domanda. | scheda **Documenti** |
+
+## L'interfaccia
+
+Tre schede, pensate per essere proiettate durante una discussione tecnica:
+
+- **💬 Chat** — domande sul corpus aziendale, sui soli documenti caricati, o su entrambi. Ogni
+  risposta mostra ruolo, ambito, latenza, eventi di sicurezza e fonti (📄 corpus, 📎 caricato).
+- **📎 Documenti** — caricamento di PDF/MD/TXT con **referto di sicurezza**: quante PII sono state
+  rimosse e di che tipo, confronto affiancato fra testo originale e testo anonimizzato (è il
+  secondo che viene indicizzato e inviato all'LLM), e segnalazione dei blocchi che contengono
+  istruzioni rivolte all'assistente.
+- **🛡️ Sicurezza** — i sei scenari di attacco eseguibili con un clic e l'audit trail in tabella.
+
+I documenti caricati vivono in una **collection separata** con clearance ereditata dal ruolo
+attivo: non contaminano il corpus aziendale, si svuotano con un pulsante, e un file caricato da un
+utente `management` resta invisibile a un `agent`.
 
 ## Quickstart
 
@@ -58,7 +75,7 @@ dimensione diversa: 1536 per `text-embedding-3-small`, 256 per quello determinis
 provider nuovo va eseguito `ingest` una volta per quel provider; gli indici già costruiti restano
 validi e si può alternare senza re-indicizzare.
 
-Demo guidata: `bash scripts/demo.sh openai` (o `fake`). Test: `.venv/bin/pytest -q` — 48 test, tutti
+Demo guidata: `bash scripts/demo.sh openai` (o `fake`). Test: `.venv/bin/pytest -q` — 62 test, tutti
 offline, nessuna API key richiesta.
 
 ## Architettura
@@ -111,6 +128,7 @@ src/secure_rag/
 ├── config.py              impostazioni da .env
 ├── providers.py           factory LLM/embeddings (openai | azure | ollama | fake)
 ├── ingestion.py           load → mask → chunk → metadati di clearance
+├── uploads.py             file caricati in sessione: limiti, masking, referto di sicurezza
 ├── vectorstore.py         ChromaDB + filtro RBAC sul retrieval
 ├── rag.py                 pipeline con i sette passi di controllo
 ├── cli.py                 ingest · ask · attack-demo · audit
@@ -119,9 +137,9 @@ src/secure_rag/
     ├── guardrails.py      input guard · context guard · output guard
     └── audit.py           audit trail JSONL
 
-app/streamlit_app.py       UI demo con pannello di sicurezza
+app/streamlit_app.py       UI demo a schede: chat, upload documenti, sicurezza
 data/policies/             4 documenti sintetici, uno deliberatamente compromesso
-tests/                     32 test, nessuna chiamata di rete
+tests/                     62 test, nessuna chiamata di rete
 ```
 
 ## Documentazione

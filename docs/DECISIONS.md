@@ -127,7 +127,40 @@ opzionale proprio nel punto in cui si verifica se quel pacchetto serve.
 
 ---
 
-## ADR-009 — Chunk da 800 caratteri con overlap 120
+## ADR-009 — Documenti caricati in una collection separata, non nel corpus
+
+**Contesto.** L'interfaccia permette di caricare un file e interrogarlo. Indicizzarlo nella
+collection principale sarebbe stato più semplice.
+
+**Decisione.** I file caricati finiscono in `<collection>_uploads`, con `uploaded: true` nei
+metadati e clearance ereditata dal ruolo attivo. Lo scope della ricerca è scelto dall'utente:
+corpus, solo caricati, o entrambi.
+
+**Alternative scartate.** Collection unica con un flag nei metadati: un errore nel filtro
+renderebbe permanente la contaminazione del corpus aziendale con contenuto non verificato.
+
+**Conseguenze.** Gli upload si svuotano con un pulsante senza toccare l'indice ufficiale, e il
+filtro RBAC continua ad applicarsi anche a essi. Limite noto: la collection è unica per istanza,
+quindi in un deployment multiutente andrebbe partizionata per sessione.
+
+---
+
+## ADR-010 — Referto di sicurezza al caricamento, prima della prima domanda
+
+**Contesto.** Un file caricato è il vettore naturale della prompt injection indiretta. Con il solo
+context guard a runtime, l'utente scoprirebbe il problema solo di riflesso, dentro una risposta.
+
+**Decisione.** `process_upload` esegue subito masking e scansione, e restituisce un `UploadReport`
+con conteggio e tipo delle PII rimosse, confronto prima/dopo del testo, e numero di blocchi che
+contengono istruzioni rivolte all'assistente.
+
+**Conseguenze.** Il rischio è visibile nel momento in cui entra nel sistema. I chunk sospetti
+vengono comunque indicizzati e marcati, così il guard a runtime li ferma una seconda volta: due
+livelli indipendenti, coerente con ADR-005.
+
+---
+
+## ADR-011 — Chunk da 800 caratteri con overlap 120
 
 **Contesto.** Il documento di partenza proponeva 300/50.
 

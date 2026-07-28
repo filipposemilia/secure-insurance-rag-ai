@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
+from typing import Literal
 
 from langchain_core.documents import Document
 from langchain_core.output_parsers import StrOutputParser
@@ -37,7 +38,10 @@ from secure_rag.security.guardrails import (
     validate_output,
 )
 from secure_rag.security.pii import PIIMasker
-from secure_rag.vectorstore import get_retriever
+from secure_rag.vectorstore import collection_size, get_retriever
+
+# Dove cercare: corpus aziendale, documenti caricati in sessione, o entrambi.
+SearchScope = Literal["corpus", "uploads", "both"]
 
 # I delimitatori sono espliciti e dichiarati nel prompt: il modello sa che tutto ciò che sta fra
 # i marcatori è **dato**, non istruzione. È la contromisura di base alla injection indiretta.
@@ -78,6 +82,8 @@ class RAGResponse:
     output_verdict: GuardVerdict | None = None
     context_scan: ContextScanResult | None = None
     sources: list[str] = field(default_factory=list)
+    uploaded_sources: list[str] = field(default_factory=list)
+    scope: str = "corpus"
     context_preview: str = ""
     prompt_sent: str = ""
     latency_ms: int = 0
@@ -124,8 +130,37 @@ class SecureRAGPipeline:
     def audit(self) -> AuditLogger:
         return self._audit
 
-    def answer(self, question: str, role: str = "agent") -> RAGResponse:
-        """Esegue una richiesta completa applicando tutti i controlli."""
+    def retrieve(self, question: str, role: str, scope: SearchScope) -> list[Document]:
+        """Recupera i chunk dalle collection previste dallo scope, sempre filtrati per ruolo.
+
+        Il filtro RBAC è applicato a ogni collection, inclusa quella dei documenti caricati: un
+        file caricato da un utente `management` non diventa visibile a un `agent`.
+        """
+        documents: list[Document] = []
+
+        if scope in ("corpus", "both"):
+            documents.extend(get_retriever(role, self._settings).invoke(question))
+
+        if scope in ("uploads", "both"):
+            upload_settings = self._settings.with_collection(
+                self._settings.upload_collection_name
+            )
+            if collection_size(upload_settings) > 0:
+                documents.extend(get_retriever(role, upload_settings).invoke(question))
+
+        return documents
+
+    def answer(
+        self,
+        question: str,
+        role: str = "agent",
+        scope: SearchScope = "corpus",
+    ) -> RAGResponse:
+        """Esegue una richiesta completa applicando tutti i controlli.
+
+        `scope` sceglie dove cercare: nel corpus aziendale, nei soli documenti caricati in
+        sessione, oppure in entrambi.
+        """
         started = time.perf_counter()
         provider = describe_provider(self._settings)
 
@@ -147,9 +182,8 @@ class SecureRAGPipeline:
             self._write_audit(question, role, response)
             return response
 
-        # [2] Retrieval con filtro RBAC.
-        retriever = get_retriever(role, self._settings)
-        retrieved = retriever.invoke(question)
+        # [2] Retrieval con filtro RBAC, sulle collection previste dallo scope.
+        retrieved = self.retrieve(question, role, scope)
 
         # [3] Context guard: neutralizza la injection indiretta nascosta nei documenti.
         scan = scan_context(retrieved)
@@ -166,6 +200,13 @@ class SecureRAGPipeline:
 
         context = format_context(safe_documents)
         sources = sorted({str(d.metadata.get("source", "")) for d in safe_documents if d.metadata})
+        uploaded_sources = sorted(
+            {
+                str(document.metadata.get("source", ""))
+                for document in safe_documents
+                if document.metadata.get("uploaded")
+            }
+        )
 
         if not safe_documents:
             answer = "Informazione non presente nella documentazione della polizza."
@@ -180,6 +221,8 @@ class SecureRAGPipeline:
                 input_verdict=input_verdict,
                 context_scan=scan,
                 sources=sources,
+                uploaded_sources=uploaded_sources,
+                scope=scope,
                 latency_ms=_elapsed_ms(started),
                 provider=provider,
             )
@@ -215,6 +258,8 @@ class SecureRAGPipeline:
             output_verdict=output_verdict,
             context_scan=scan,
             sources=sources,
+            uploaded_sources=uploaded_sources,
+            scope=scope,
             context_preview=context[:1200],
             prompt_sent=prompt_sent,
             latency_ms=_elapsed_ms(started),
@@ -239,7 +284,9 @@ class SecureRAGPipeline:
                 query_length=len(question),
                 input_verdict="blocked" if (response.input_verdict and response.input_verdict.blocked) else "allowed",
                 input_rule=response.input_verdict.rule if response.input_verdict else "",
+                scope=response.scope,
                 context_sources=response.sources,
+                uploaded_sources=response.uploaded_sources,
                 quarantined_sources=sorted(set(response.context_scan.quarantined)) if response.context_scan else [],
                 pii_masked_in_context=residual_pii,
                 output_verdict="blocked" if (response.output_verdict and response.output_verdict.blocked) else "allowed",

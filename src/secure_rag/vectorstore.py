@@ -48,6 +48,19 @@ def index_documents(documents: list[Document], settings: Settings | None = None)
     return len(documents)
 
 
+def add_documents(documents: list[Document], settings: Settings | None = None) -> int:
+    """Aggiunge chunk senza azzerare la collection.
+
+    Usato dai documenti caricati in sessione, che si accumulano su una collection separata invece
+    di sostituire il corpus aziendale.
+    """
+    settings = settings or get_settings()
+    if not documents:
+        return 0
+    get_vectorstore(settings).add_documents(documents)
+    return len(documents)
+
+
 def get_retriever(role: str, settings: Settings | None = None) -> VectorStoreRetriever:
     """Retriever filtrato sul livello di clearance del ruolo richiedente."""
     settings = settings or get_settings()

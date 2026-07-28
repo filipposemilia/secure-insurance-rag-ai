@@ -81,9 +81,26 @@ class Settings(BaseSettings):
         slug = f"{self.llm_provider}__{self.embedding_model_name}".replace("/", "-")
         return self.chroma_base_dir / slug
 
+    @property
+    def upload_collection_name(self) -> str:
+        """Collection separata per i documenti caricati dall'utente in sessione.
+
+        Tenerli fuori dalla collection principale evita che un file caricato da chiunque
+        contamini in modo permanente il corpus aziendale: si svuota senza toccare l'indice ufficiale.
+        """
+        return f"{self.collection_name}_uploads"
+
     def with_provider(self, provider: ProviderName) -> "Settings":
         """Copia delle impostazioni con un provider diverso (usata dalla scelta interattiva)."""
         return self.model_copy(update={"llm_provider": provider})
+
+    def with_collection(self, name: str) -> "Settings":
+        """Copia delle impostazioni puntata a un'altra collection dello stesso indice."""
+        return self.model_copy(update={"collection_name": name})
+
+    # --- Limiti sui file caricati (mitigazione LLM04: Model Denial of Service) ---
+    max_upload_mb: float = 5.0
+    max_upload_chunks: int = 120
 
 
 @lru_cache
