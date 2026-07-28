@@ -202,13 +202,23 @@ def render_response(response: RAGResponse) -> None:
             st.code(response.prompt_sent, language="markdown")
 
 
+def run_query(question: str, scope: str, as_role: str | None = None) -> RAGResponse:
+    """Esegue una domanda applicando l'intera pipeline di sicurezza.
+
+    `as_role` permette a uno scenario di girare con il **proprio** ruolo invece che con quello
+    selezionato in barra laterale: è ciò che rende confrontabili gli scenari 5 e 6, che pongono la
+    stessa domanda con clearance diverse.
+    """
+    with st.spinner("Elaborazione con controlli di sicurezza…"):
+        return get_pipeline(provider).answer(question, role=as_role or role, scope=scope)
+
+
 def ask(question: str, scope: str) -> None:
     """Esegue una domanda e la registra nello storico della chat."""
     with st.chat_message("user"):
         st.write(question)
     with st.chat_message("assistant"):
-        with st.spinner("Elaborazione con controlli di sicurezza…"):
-            response = get_pipeline(provider).answer(question, role=role, scope=scope)
+        response = run_query(question, scope)
         render_response(response)
     st.session_state["history"].append({"question": question, "response": response})
 
@@ -258,9 +268,6 @@ with tab_chat:
             render_response(entry["response"])
 
     question = st.chat_input("Fai una domanda sulle polizze…")
-
-    if pending := st.session_state.pop("pending_question", None):
-        question = pending
 
     if question:
         if collection_size(settings) == 0 and scope == "corpus":
@@ -386,8 +393,12 @@ with tab_docs:
             chiedi = st.button("Chiedi", width="stretch", type="primary")
 
         if chiedi and domanda:
-            st.session_state["pending_question"] = domanda
-            st.info("Domanda inviata: apri la scheda **Chat** per vedere la risposta.", icon="💬")
+            # Eseguita qui, non rimandata alla scheda Chat: in demo il risultato deve comparire
+            # dov'è stato chiesto. Finisce comunque nello storico della conversazione.
+            response = run_query(domanda, scope="uploads")
+            st.session_state["history"].append({"question": domanda, "response": response})
+            st.markdown("**Esito**")
+            render_response(response)
 
         if st.button("Rimuovi tutti i documenti caricati"):
             reset_collection(upload_settings(settings))
@@ -411,16 +422,36 @@ with tab_security:
     st.subheader("Scenari di attacco")
     st.caption("Ogni scenario è mappato su un rischio della OWASP Top 10 for LLM Applications.")
 
+    st.caption(
+        "Ogni scenario gira con il **ruolo che gli è proprio**, indipendentemente da quello "
+        "selezionato in barra laterale: è ciò che rende confrontabili il 5 e il 6, che pongono la "
+        "stessa domanda con clearance diverse."
+    )
+
     columns = st.columns(3)
     for index, scenario in enumerate(SCENARIOS):
         with columns[index % 3]:
             with st.container(border=True):
                 st.markdown(f"**{scenario.name}**")
                 st.caption(f"OWASP: {scenario.owasp}")
+                st.caption(f"Ruolo: `{scenario.role}`")
                 st.caption(scenario.expected)
                 if st.button("Esegui", key=f"scenario_{index}", width="stretch"):
-                    st.session_state["pending_question"] = scenario.question
-                    st.info("Apri la scheda **Chat** per vedere l'esito.", icon="💬")
+                    st.session_state["scenario_result"] = {
+                        "name": scenario.name,
+                        "question": scenario.question,
+                        "expected": scenario.expected,
+                        "response": run_query(
+                            scenario.question, scope="corpus", as_role=scenario.role
+                        ),
+                    }
+
+    if result := st.session_state.get("scenario_result"):
+        st.divider()
+        st.markdown(f"#### Esito — {result['name']}")
+        st.caption(f"Atteso: {result['expected']}")
+        st.code(result["question"], language=None)
+        render_response(result["response"])
 
     st.divider()
     st.subheader("Audit trail")

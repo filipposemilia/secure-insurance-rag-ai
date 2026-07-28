@@ -212,7 +212,7 @@ class SecureRAGPipeline:
             answer = "Informazione non presente nella documentazione della polizza."
             if scan.quarantined:
                 answer += (
-                    "\n\nNota di sicurezza: i documenti pertinenti sono stati messi in quarantena "
+                    "\n\nNota di sicurezza: i documenti recuperati sono stati messi in quarantena "
                     "perché contengono istruzioni sospette rivolte all'assistente."
                 )
             response = RAGResponse(
@@ -244,7 +244,7 @@ class SecureRAGPipeline:
             # La quarantena va dichiarata all'utente: un documento manomesso è un incidente da
             # segnalare, non un dettaglio da nascondere dietro una risposta apparentemente normale.
             raw_answer += (
-                "\n\n⚠ Nota di sicurezza: uno o più documenti pertinenti "
+                "\n\n⚠ Nota di sicurezza: uno o più documenti recuperati "
                 f"({', '.join(sorted(set(scan.quarantined)))}) contengono istruzioni rivolte "
                 "all'assistente e sono stati esclusi dal contesto. Segnalare al team Sicurezza."
             )

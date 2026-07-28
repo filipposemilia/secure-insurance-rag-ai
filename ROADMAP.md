@@ -11,7 +11,7 @@
 | 3b | Scelta interattiva del provider all'avvio (OpenAI / Ollama / offline) con rilevamento della disponibilità, indici separati per modello | ✅ |
 | 4 | Documentazione: README, architettura, modello di sicurezza con mapping OWASP, ADR | ✅ |
 
-Test: 62, tutti offline (`.venv/bin/pytest -q`).
+Test: 67, tutti offline (`.venv/bin/pytest -q`), inclusi 5 di regressione sull'interfaccia Streamlit.
 
 ## Future work
 
@@ -34,6 +34,7 @@ aggiungerebbe e perché è stata esclusa.
 
 | Voce | Cosa aggiunge | Perché non ora | Sforzo |
 | :--- | :--- | :--- | :--- |
+| **Soglia minima di similarità sul retrieval** | Oggi il retriever restituisce sempre i primi `k=4` chunk, anche quando sono debolmente attinenti: su un corpus da 14 chunk questo fa scattare la nota di quarantena quasi a ogni domanda (*alert fatigue*) | Va tarata su un corpus realistico: con 14 documenti qualunque soglia sarebbe arbitraria | ~2 h |
 | **Hybrid search (BM25 + vettoriale)** | Trova i riferimenti esatti ("articolo 14-bis") che l'embedding sbaglia | Richiede un secondo indice e la fusione dei ranking | ~4 h |
 | **Re-ranking con cross-encoder** | Passa all'LLM 3 chunk davvero pertinenti invece di 4 approssimativi: meno token, più precisione | Aggiunge un modello locale da scaricare | ~3 h |
 | **Chunking gerarchico per articoli** | Rispetta la struttura contrattuale invece di tagliare a lunghezza fissa | Richiede un parser dedicato per il formato delle polizze | ~5 h |

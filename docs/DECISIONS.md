@@ -169,3 +169,22 @@ livelli indipendenti, coerente con ADR-005.
 **Motivo.** Le clausole assicurative sono periodi lunghi con condizioni concatenate ("a condizione
 che… salvo che…"). Chunk da 300 caratteri spezzano la condizione dalla sua eccezione, producendo
 risposte formalmente ancorate ma sostanzialmente sbagliate.
+
+---
+
+## ADR-012 — Gli scenari di attacco portano con sé il proprio ruolo
+
+**Contesto.** Nell'interfaccia, i pulsanti degli scenari impostavano una domanda "in attesa" che la
+scheda Chat avrebbe eseguito al rerun successivo, con il ruolo selezionato in barra laterale. Due
+conseguenze, entrambe emerse solo alla prova generale: cambiare scheda in Streamlit non provoca un
+rerun, quindi la domanda non partiva; e lo scenario 6 (`management`) girava come `agent`, annullando
+proprio il confronto RBAC che deve dimostrare.
+
+**Decisione.** Lo scenario viene eseguito nel momento del click, con `run_query(..., as_role=
+scenario.role)`, e l'esito compare nella scheda in cui è stato lanciato. Il meccanismo della domanda
+"in attesa" è stato rimosso.
+
+**Conseguenze.** L'esito di uno scenario non dipende più dallo stato della barra laterale: gli
+scenari 5 e 6 sono confrontabili con due click. Il ruolo di ciascuno scenario è dichiarato sulla
+scheda, così chi guarda vede che la differenza sta nella clearance e non nella domanda. La UI, che
+non era coperta da alcun test, ha ora cinque test di regressione in `tests/test_streamlit_ui.py`.
