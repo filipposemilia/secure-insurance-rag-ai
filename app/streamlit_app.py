@@ -18,9 +18,9 @@ import streamlit as st
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from secure_rag.cli import SCENARIOS  # noqa: E402
-from secure_rag.config import get_settings  # noqa: E402
+from secure_rag.config import Settings, get_settings  # noqa: E402
 from secure_rag.ingestion import CLEARANCE_LEVELS, build_documents  # noqa: E402
-from secure_rag.providers import describe_provider  # noqa: E402
+from secure_rag.providers import describe_provider, probe_providers  # noqa: E402
 from secure_rag.rag import RAGResponse, SecureRAGPipeline  # noqa: E402
 from secure_rag.security.pii import PIIMasker  # noqa: E402
 from secure_rag.vectorstore import collection_size, index_documents  # noqa: E402
@@ -37,11 +37,19 @@ ROLE_LABELS = {
 @st.cache_resource(show_spinner=False)
 def get_pipeline(provider: str) -> SecureRAGPipeline:
     """Pipeline riusata tra i rerun. La chiave di cache è il provider attivo."""
-    return SecureRAGPipeline()
+    return SecureRAGPipeline(get_settings().with_provider(provider))
 
 
-def run_ingestion() -> dict:
-    settings = get_settings()
+@st.cache_data(ttl=30, show_spinner=False)
+def get_provider_statuses() -> list[tuple[str, str, str, bool, str]]:
+    """Disponibilità dei provider, in forma serializzabile per la cache di Streamlit."""
+    return [
+        (status.name, status.label, status.detail, status.available, status.hint)
+        for status in probe_providers(get_settings())
+    ]
+
+
+def run_ingestion(settings: Settings) -> dict:
     masker = PIIMasker()
     documents, report = build_documents(settings, masker)
     index_documents(documents, settings)
@@ -59,17 +67,37 @@ def run_ingestion() -> dict:
 # Sidebar
 # ---------------------------------------------------------------------------
 
-settings = get_settings()
+base_settings = get_settings()
+statuses = get_provider_statuses()
+selectable = [status for status in statuses if status[3]]
 
 with st.sidebar:
     st.title("🛡️ Secure Insurance RAG")
     st.caption("PoC di RAG sicuro su documentazione assicurativa")
 
-    st.subheader("Configurazione")
-    st.write(f"**Provider LLM:** {describe_provider(settings)}")
+    st.subheader("Modello")
+    default_index = next(
+        (index for index, status in enumerate(selectable) if status[0] == base_settings.llm_provider),
+        0,
+    )
+    provider = st.radio(
+        "Provider LLM",
+        options=[status[0] for status in selectable],
+        index=default_index,
+        format_func=lambda name: next(s[1] for s in selectable if s[0] == name),
+        help="Ogni provider ha il proprio indice: cambiando modello va rieseguita l'indicizzazione.",
+    )
+    st.caption(next(status[2] for status in selectable if status[0] == provider))
+
+    for name, label, _, available, hint in statuses:
+        if not available:
+            st.caption(f"○ {label} — non disponibile · {hint}")
+
+    settings = base_settings.with_provider(provider)
     if settings.is_offline:
         st.info("Modalità offline: nessuna chiamata di rete, nessun token consumato.", icon="🔌")
 
+    st.subheader("Configurazione")
     role = st.selectbox(
         "Ruolo del richiedente",
         options=list(CLEARANCE_LEVELS),
@@ -86,7 +114,7 @@ with st.sidebar:
 
     if st.button("Indicizza documenti", width="stretch", type="primary"):
         with st.spinner("Anonimizzazione e indicizzazione in corso…"):
-            st.session_state["ingestion"] = run_ingestion()
+            st.session_state["ingestion"] = run_ingestion(settings)
         st.rerun()
 
     if report := st.session_state.get("ingestion"):
@@ -115,8 +143,9 @@ st.caption(
 
 if collection_size(settings) == 0:
     st.warning(
-        "Nessun documento indicizzato. Usa **Indicizza documenti** nella barra laterale per "
-        "avviare la pipeline di ingestion anonimizzata.",
+        f"Nessun documento indicizzato per **{describe_provider(settings)}**. Usa "
+        "**Indicizza documenti** nella barra laterale: ogni provider ha il proprio indice, "
+        "perché i modelli di embedding producono vettori di dimensione diversa.",
         icon="📄",
     )
 
@@ -185,12 +214,12 @@ if question:
             st.write(question)
         with st.chat_message("assistant"):
             with st.spinner("Elaborazione con controlli di sicurezza…"):
-                response = get_pipeline(settings.llm_provider).answer(question, role=role)
+                response = get_pipeline(provider).answer(question, role=role)
             render_response(response)
         st.session_state["history"].append({"question": question, "response": response})
 
 with st.expander("Audit trail (ultime interazioni)"):
-    records = get_pipeline(settings.llm_provider).audit.tail(10)
+    records = get_pipeline(provider).audit.tail(10)
     if records:
         st.dataframe(records, width="stretch")
         st.caption(

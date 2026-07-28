@@ -19,7 +19,7 @@ def settings(tmp_path_factory) -> Settings:
     tmp = tmp_path_factory.mktemp("secure_rag")
     settings = Settings(
         llm_provider="fake",
-        chroma_dir=tmp / "chroma",
+        chroma_base_dir=tmp / "chroma",
         audit_log_path=tmp / "audit.jsonl",
         collection_name="test_policies",
     )

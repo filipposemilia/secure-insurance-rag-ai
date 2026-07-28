@@ -12,9 +12,13 @@ demo anche senza API key.
 from __future__ import annotations
 
 import hashlib
+import json
 import math
 import re
+import urllib.request
+from dataclasses import dataclass
 from typing import Any, Sequence
+from urllib.error import URLError
 
 from langchain_core.callbacks import CallbackManagerForLLMRun
 from langchain_core.embeddings import Embeddings
@@ -22,7 +26,7 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
 
-from secure_rag.config import Settings, get_settings
+from secure_rag.config import ProviderName, Settings, get_settings
 
 # ---------------------------------------------------------------------------
 # Provider deterministico per test e demo offline
@@ -187,7 +191,7 @@ def get_chat_model(settings: Settings | None = None) -> BaseChatModel:
         )
 
     if provider == "ollama":
-        from langchain_ollama import ChatOllama  # extra opzionale: pip install ".[ollama]"
+        from langchain_ollama import ChatOllama
 
         return ChatOllama(
             model=settings.ollama_chat_model,
@@ -237,6 +241,111 @@ def get_embeddings(settings: Settings | None = None) -> Embeddings:
     raise ValueError(f"Provider embeddings non supportato: {provider!r}")
 
 
+# ---------------------------------------------------------------------------
+# Rilevamento della disponibilità (usato dalla scelta interattiva all'avvio)
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class ProviderStatus:
+    """Disponibilità di un provider sulla macchina corrente."""
+
+    name: ProviderName
+    label: str
+    detail: str
+    available: bool
+    hint: str = ""
+
+
+def probe_ollama(settings: Settings | None = None, timeout: float = 1.5) -> tuple[bool, list[str]]:
+    """Verifica se il servizio Ollama risponde e quali modelli ha scaricato.
+
+    Usa solo la libreria standard: il rilevamento non deve dipendere da un pacchetto opzionale.
+    """
+    settings = settings or get_settings()
+    url = settings.ollama_base_url.rstrip("/") + "/api/tags"
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as response:  # noqa: S310
+            payload = json.loads(response.read().decode("utf-8"))
+    except (URLError, TimeoutError, OSError, json.JSONDecodeError):
+        return False, []
+    models = [str(model.get("name", "")) for model in payload.get("models", [])]
+    return True, models
+
+
+def probe_providers(settings: Settings | None = None) -> list[ProviderStatus]:
+    """Elenco dei provider con la loro disponibilità effettiva, in ordine di presentazione."""
+    settings = settings or get_settings()
+    statuses: list[ProviderStatus] = []
+
+    # --- OpenAI ---
+    has_key = bool(settings.openai_api_key)
+    statuses.append(
+        ProviderStatus(
+            name="openai",
+            label="OpenAI (in rete)",
+            detail=f"{settings.openai_chat_model} · embeddings {settings.openai_embedding_model}",
+            available=has_key,
+            hint="" if has_key else "imposta OPENAI_API_KEY in .env",
+        )
+    )
+
+    # --- Ollama locale ---
+    running, models = probe_ollama(settings)
+    chat_ready = any(model.startswith(settings.ollama_chat_model) for model in models)
+    embed_ready = any(model.startswith(settings.ollama_embedding_model) for model in models)
+    if not running:
+        hint = (
+            "servizio non raggiungibile su "
+            f"{settings.ollama_base_url} — installa Ollama da ollama.com, poi: "
+            f"ollama pull {settings.ollama_chat_model} && ollama pull {settings.ollama_embedding_model}"
+        )
+    elif not (chat_ready and embed_ready):
+        mancanti = [
+            model
+            for model, ready in (
+                (settings.ollama_chat_model, chat_ready),
+                (settings.ollama_embedding_model, embed_ready),
+            )
+            if not ready
+        ]
+        hint = "modelli mancanti — esegui: " + " && ".join(f"ollama pull {m}" for m in mancanti)
+    else:
+        hint = ""
+    statuses.append(
+        ProviderStatus(
+            name="ollama",
+            label="Ollama (locale, on-premise)",
+            detail=f"{settings.ollama_chat_model} · embeddings {settings.ollama_embedding_model}",
+            available=running and chat_ready and embed_ready,
+            hint=hint,
+        )
+    )
+
+    # --- Azure: mostrato solo se configurato, è il percorso enterprise ---
+    if settings.azure_openai_endpoint and settings.azure_openai_api_key:
+        statuses.append(
+            ProviderStatus(
+                name="azure",
+                label="Azure OpenAI (enterprise)",
+                detail=f"deployment {settings.azure_chat_deployment}",
+                available=True,
+            )
+        )
+
+    # --- Fake: sempre disponibile ---
+    statuses.append(
+        ProviderStatus(
+            name="fake",
+            label="Offline deterministico",
+            detail="nessuna rete, nessun token consumato — usato dai test",
+            available=True,
+        )
+    )
+
+    return statuses
+
+
 def _require(value: str, name: str) -> None:
     if not value:
         raise RuntimeError(
@@ -260,7 +369,10 @@ def describe_provider(settings: Settings | None = None) -> str:
 __all__: Sequence[str] = (
     "DeterministicChatModel",
     "DeterministicEmbeddings",
+    "ProviderStatus",
     "describe_provider",
     "get_chat_model",
     "get_embeddings",
+    "probe_ollama",
+    "probe_providers",
 )

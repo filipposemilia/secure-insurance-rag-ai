@@ -90,7 +90,44 @@ esplicitamente quando si mostra la demo in questa modalità.
 
 ---
 
-## ADR-007 — Chunk da 800 caratteri con overlap 120
+## ADR-007 — Un indice per provider, non un indice condiviso
+
+**Contesto.** Modelli di embedding diversi producono vettori di dimensione diversa (1536 per
+`text-embedding-3-small`, 768 per `nomic-embed-text`, 256 per il provider deterministico).
+Scrivendoli nella stessa collection Chroma, il primo cambio di provider fa fallire la query.
+
+**Decisione.** `Settings.chroma_dir` è una property che compone `chroma_db/<provider>__<modello>`.
+
+**Alternative scartate.** Un solo indice con re-indicizzazione forzata a ogni cambio: costa tempo e
+token a ogni switch, e in demo è un rischio inutile.
+
+**Conseguenze.** Si può alternare fra OpenAI e modalità offline senza re-indicizzare, il che è
+comodo quando la rete al colloquio non è affidabile. In cambio, il primo uso di un provider nuovo
+richiede un `ingest` dedicato, segnalato con un messaggio esplicito.
+
+---
+
+## ADR-008 — Menu di scelta del provider all'avvio, con rilevamento della disponibilità
+
+**Contesto.** Il provider era configurabile solo da `.env`. Passare da cloud a locale richiedeva di
+editare un file, e non c'era modo di sapere se Ollama fosse effettivamente utilizzabile.
+
+**Decisione.** I comandi che usano un LLM mostrano un menu che elenca i provider **verificati sulla
+macchina**: la chiave OpenAI presente, il servizio Ollama raggiungibile e con i modelli scaricati.
+Le opzioni non disponibili restano visibili, ma non selezionabili, con l'istruzione per abilitarle.
+
+**Alternative scartate.** Elencare tutti i provider senza verifica: sposta l'errore a valle, dopo il
+retrieval, con un messaggio incomprensibile. Rilevare la disponibilità con una chiamata di
+fatturazione a OpenAI: costa una richiesta a ogni avvio.
+
+**Conseguenze.** Il menu va saltato con `--provider` o `--no-prompt` negli script; viene inoltre
+saltato automaticamente quando `stdin` non è un terminale, così pipe e CI restano deterministiche.
+Il probe di Ollama usa solo `urllib` della libreria standard, per non dipendere da un pacchetto
+opzionale proprio nel punto in cui si verifica se quel pacchetto serve.
+
+---
+
+## ADR-009 — Chunk da 800 caratteri con overlap 120
 
 **Contesto.** Il documento di partenza proponeva 300/50.
 

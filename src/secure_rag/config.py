@@ -51,7 +51,7 @@ class Settings(BaseSettings):
 
     # --- Percorsi ---
     policies_dir: Path = PROJECT_ROOT / "data" / "policies"
-    chroma_dir: Path = PROJECT_ROOT / "chroma_db"
+    chroma_base_dir: Path = PROJECT_ROOT / "chroma_db"
     audit_log_path: Path = PROJECT_ROOT / "logs" / "audit.jsonl"
     collection_name: str = "insurance_policies"
 
@@ -59,6 +59,31 @@ class Settings(BaseSettings):
     def is_offline(self) -> bool:
         """True quando gira senza rete né API key (provider `fake`)."""
         return self.llm_provider == "fake"
+
+    @property
+    def embedding_model_name(self) -> str:
+        """Modello di embedding effettivamente in uso, secondo il provider attivo."""
+        return {
+            "openai": self.openai_embedding_model,
+            "azure": self.azure_embedding_deployment,
+            "ollama": self.ollama_embedding_model,
+            "fake": "deterministic-256",
+        }[self.llm_provider]
+
+    @property
+    def chroma_dir(self) -> Path:
+        """Directory dell'indice, separata per provider e modello di embedding.
+
+        Modelli diversi producono vettori di dimensione diversa (256 per il provider `fake`, 1536
+        per `text-embedding-3-small`): tenerli in indici distinti evita l'errore di dimensione
+        quando si passa da un provider all'altro, e permette di conservare più indici in parallelo.
+        """
+        slug = f"{self.llm_provider}__{self.embedding_model_name}".replace("/", "-")
+        return self.chroma_base_dir / slug
+
+    def with_provider(self, provider: ProviderName) -> "Settings":
+        """Copia delle impostazioni con un provider diverso (usata dalla scelta interattiva)."""
+        return self.model_copy(update={"llm_provider": provider})
 
 
 @lru_cache

@@ -25,18 +25,41 @@ audit trail ricostruibile.
 ```bash
 uv venv --python 3.12
 uv pip install -e ".[dev]"
-cp .env.example .env          # funziona già così: LLM_PROVIDER=fake, nessuna API key richiesta
+cp .env.example .env          # opzionale: aggiungi OPENAI_API_KEY per usare il modello in rete
 
 .venv/bin/secure-rag ingest         # anonimizza e indicizza
+.venv/bin/secure-rag ask "Qual è la franchigia della sezione cyber?"
 .venv/bin/secure-rag attack-demo    # i sei scenari di sicurezza
 .venv/bin/streamlit run app/streamlit_app.py
 ```
 
-Per usare un modello reale, in `.env`: `LLM_PROVIDER=openai` e `OPENAI_API_KEY=…` (oppure `azure` /
-`ollama`). Cambiando provider di embedding va rieseguito `ingest`, perché cambia la dimensione dei
-vettori.
+### Scelta del modello all'avvio
 
-Demo guidata completa: `bash scripts/demo.sh`. Test: `.venv/bin/pytest -q` (32 test, tutti offline).
+I comandi che usano un LLM aprono un menu con i provider **effettivamente disponibili** sulla
+macchina:
+
+```
+  ● 1) OpenAI (in rete)             (predefinito)
+      gpt-4o-mini · embeddings text-embedding-3-small
+  ○ 2) Ollama (locale, on-premise)  non disponibile
+      ↳ servizio non raggiungibile su http://localhost:11434 — installa Ollama da ollama.com,
+        poi: ollama pull llama3.1 && ollama pull nomic-embed-text
+  ● 3) Offline deterministico
+      nessuna rete, nessun token consumato — usato dai test
+```
+
+Per saltarlo: `--provider openai|ollama|fake` oppure `--no-prompt` (usa il valore di `.env`). Il
+menu non compare quando lo standard input non è un terminale, così script e CI restano
+deterministici.
+
+**Ogni provider ha il proprio indice** (`chroma_db/openai__text-embedding-3-small`,
+`chroma_db/fake__deterministic-256`, …), perché i modelli di embedding producono vettori di
+dimensione diversa: 1536 per `text-embedding-3-small`, 256 per quello deterministico. Passando a un
+provider nuovo va eseguito `ingest` una volta per quel provider; gli indici già costruiti restano
+validi e si può alternare senza re-indicizzare.
+
+Demo guidata: `bash scripts/demo.sh openai` (o `fake`). Test: `.venv/bin/pytest -q` — 48 test, tutti
+offline, nessuna API key richiesta.
 
 ## Architettura
 
