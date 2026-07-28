@@ -4,7 +4,7 @@
 
 | Fase | Contenuto | Stato |
 | :--- | :--- | :--- |
-| 0 | Scaffolding, ambiente `uv` su Python 3.12, governance (`CLAUDE.md`, sessioni, memorie) | ✅ |
+| 0 | Scaffolding, ambiente `uv` su Python 3.12, governance (log di sessione, ADR) | ✅ |
 | 1 | Core RAG: ingestion anonimizzata, ChromaDB con RBAC, provider intercambiabili, catena LCEL, CLI | ✅ |
 | 2 | Security layer: input guard, context guard (injection indiretta), output guard, audit trail JSONL, sei scenari di attacco | ✅ |
 | 3 | UI Streamlit a schede: chat con selettore di ambito, upload documenti con referto di sicurezza, pannello scenari e audit | ✅ |
