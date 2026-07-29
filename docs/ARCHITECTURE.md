@@ -15,23 +15,23 @@ finiscono in **collection separate**.
 ```mermaid
 flowchart LR
     subgraph CORPUS["Corpus aziendale · ingestion.py"]
-        A[PDF, MD, TXT<br/>data/policies] --> B[Anonimizzazione<br/>security/pii.py]
-        B --> C[Chunking + metadati<br/>clearance, policy_id]
+        A["PDF · MD · TXT"] --> B["Anonimizza<br/>pii.py"]
+        B --> C["Chunking<br/>+ clearance"]
     end
 
     subgraph UP["Caricati in sessione · uploads.py"]
-        D[File dell'utente] --> E{"Limiti di ingresso<br/>dimensione e numero di chunk"}
-        E -->|oltre soglia| F[Rifiutato con motivazione]
-        E -->|accettato| G[Anonimizzazione<br/>security/pii.py]
-        G --> H[Scansione preventiva<br/>referto di sicurezza]
+        D["File caricato"] --> E{"Limiti<br/>d'ingresso"}
+        E -->|oltre soglia| F["Rifiutato"]
+        E -->|accettato| G["Anonimizza<br/>pii.py"]
+        G --> H["Referto<br/>sicurezza"]
     end
 
-    C --> I[(collection principale)]
-    H --> J[(collection della sessione<br/>nome_uploads_sessione)]
-    B -.->|mappa segnaposto → valore| K[(Vault cifrato<br/>security/vault.py)]
+    C --> I[("collection<br/>principale")]
+    H --> J[("collection<br/>di sessione")]
+    B -.->|mappa| K[("Vault<br/>cifrato")]
 
-    I --> L[ChromaDB persistente<br/>vectorstore.py]
-    J --> L
+    classDef stop fill:#ffe9e9,stroke:#d1424f,color:#7d1420
+    class F stop
 ```
 
 **L'anonimizzazione precede l'embedding, sempre.** Nel vector store non esiste un codice fiscale in
@@ -52,30 +52,39 @@ runtime, perché un documento manomesso è un incidente da rendere visibile, non
 
 ```mermaid
 flowchart TB
-    Q[Domanda] --> RL{0 · Limiti di frequenza<br/>security/ratelimit.py}
-    RL -->|quota visitatore esaurita| STOP[Rifiutata<br/>zero token spesi]
-    RL -->|tetto giornaliero raggiunto| DEG[Servita in modalità<br/>degradata offline]
+    Q([Domanda]) --> RL{"0 · Limiti<br/>di frequenza"}
+    RL -->|quota esaurita| NO1["Rifiutata<br/><b>zero token spesi</b>"]
+    RL -->|tetto giornaliero| DEG["Degradata<br/>provider offline"]
     RL -->|entro i limiti| IG
     DEG --> IG
 
-    IG{1 · Input guard<br/>injection diretta} -->|bloccata| STOP
-    IG -->|ammessa| RET[2 · Retrieval filtrato per ruolo<br/>vectorstore.py]
+    IG{"1 · Input guard<br/>injection diretta"} -->|bloccata| NO1
+    IG -->|ammessa| RET["2 · Retrieval<br/>filtrato per ruolo"]
+    DB[("ChromaDB<br/>corpus + upload")] -.-> RET
 
-    DB[(ChromaDB<br/>corpus + upload di sessione)] --> RET
-    RET --> CG{3 · Context guard<br/>injection indiretta}
-    CG --> QUAR[Chunk in quarantena<br/>+ evento di audit]
-    CG --> PII[4 · PII guard sul contesto<br/>metadati inclusi]
+    RET --> CG{"3 · Context guard<br/>injection indiretta"}
+    CG -->|chunk sospetto| QUAR["In quarantena<br/>+ evento di audit"]
+    CG -->|contesto ripulito| PII["4 · PII guard<br/>metadati inclusi"]
 
-    PII --> CH[5 · Catena LCEL<br/>prompt delimitato → LLM]
-    CH --> OG{"6 · Output guard<br/>fuga di PII e groundedness"}
-    OG -->|bloccata| STOP
-    OG -->|ammessa| UNM[6b · Ripristino<br/>solo ruoli autorizzati]
-    UNM --> ANS[Risposta con citazioni]
+    PII --> CH["5 · Catena LCEL<br/>prompt delimitato"]
+    CH --> OG{"6 · Output guard<br/>PII e groundedness"}
+    OG -->|bloccata| NO2["Risposta soppressa<br/><i>token già spesi</i>"]
+    OG -->|ammessa| UNM["6b · Ripristino<br/>solo ruoli autorizzati"]
+    UNM --> ANS(["Risposta<br/>con citazioni"])
 
-    ANS --> AUD[(7 · Audit trail JSONL<br/>security/audit.py)]
-    STOP --> AUD
-    QUAR --> AUD
+    classDef stop fill:#ffe9e9,stroke:#d1424f,color:#7d1420
+    classDef ok fill:#e8f6ec,stroke:#3a9d5d,color:#14532d
+    class NO1,NO2,QUAR stop
+    class ANS ok
 ```
+
+**Ogni esito finisce nell'audit trail** (`security/audit.py`), inclusi i rifiuti e le quarantene:
+sono gli eventi che più interessano a un revisore. Le frecce non sono disegnate solo per non
+attraversare l'intero diagramma.
+
+Il nodo rosso a sinistra e quello a destra non sono la stessa cosa: un blocco in **ingresso** non è
+mai arrivato al modello, un blocco in **uscita** ha già consumato la chiamata. È la differenza fra
+una difesa che fa risparmiare e una che fa solo evitare il danno.
 
 ### Passo per passo
 

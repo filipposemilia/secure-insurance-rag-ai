@@ -100,27 +100,30 @@ offline, nessuna API key richiesta.
 ## Architettura
 
 ```mermaid
-flowchart LR
-    A[Documenti] --> B[PII masking]
-    B --> C[Chunking + metadati<br/>clearance]
-    C --> D[(ChromaDB)]
+flowchart TB
+    A["Documenti"] --> B["Anonimizzazione<br/><i>prima</i> dell'embedding"]
+    B --> D[("ChromaDB<br/>solo segnaposto")]
 
-    Q[Query utente] --> G1{Input guard}
-    G1 -->|bloccata| X[Rifiuto<br/>0 token]
-    G1 --> R[Retrieval<br/>filtrato per ruolo]
-    D --> R
-    R --> G2{Context guard}
-    G2 -->|payload| QU[Quarantena<br/>+ alert]
-    G2 --> P[Prompt LCEL<br/>contesto delimitato]
-    P --> L[LLM]
-    L --> G3{Output guard}
-    G3 --> ANS[Risposta<br/>con citazioni]
-    G3 -->|PII o allucinazione| X
+    Q(["Domanda"]) --> G1{"Input guard<br/>injection diretta"}
+    G1 -->|bloccata| X["Rifiuto<br/><b>zero token spesi</b>"]
+    G1 -->|ammessa| R["Retrieval<br/>filtrato per ruolo"]
+    D -.-> R
 
-    ANS --> AU[(Audit JSONL)]
-    X --> AU
-    QU --> AU
+    R --> G2{"Context guard<br/>injection indiretta"}
+    G2 -->|payload nel documento| QU["Quarantena<br/>+ alert"]
+    G2 -->|contesto ripulito| P["Prompt delimitato<br/>→ LLM"]
+
+    P --> G3{"Output guard<br/>PII e groundedness"}
+    G3 -->|PII o allucinazione| Y["Risposta soppressa"]
+    G3 -->|ammessa| ANS(["Risposta<br/>con citazioni"])
+
+    classDef stop fill:#ffe9e9,stroke:#d1424f,color:#7d1420
+    classDef ok fill:#e8f6ec,stroke:#3a9d5d,color:#14532d
+    class X,QU,Y stop
+    class ANS ok
 ```
+
+Ogni esito — risposta, rifiuto o quarantena — finisce nell'**audit trail**.
 
 Dettaglio dei quattro layer, del flusso passo per passo e dei punti di estensione verso
 un'architettura enterprise: **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**.
