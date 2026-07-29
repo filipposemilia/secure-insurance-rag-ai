@@ -81,3 +81,41 @@ def collection_size(settings: Settings | None = None) -> int:
         return get_vectorstore(settings)._collection.count()
     except Exception:
         return 0
+
+
+def remove_source(source: str, settings: Settings | None = None) -> int:
+    """Elimina tutti i chunk di un documento. Restituisce quanti ne sono stati rimossi.
+
+    Serve a mantenere l'indice allineato a ciò che l'utente vede: un file tolto dall'elenco deve
+    sparire anche dal retrieval. Senza, un documento caricato per errore — un CV, un contratto —
+    resterebbe interrogabile pur non comparendo più da nessuna parte nell'interfaccia.
+    """
+    settings = settings or get_settings()
+    try:
+        collection = get_vectorstore(settings)._collection
+        prima = collection.count()
+        collection.delete(where={"source": source})
+        return prima - collection.count()
+    except Exception:
+        return 0
+
+
+def drop_collections_with_prefix(prefix: str, settings: Settings | None = None) -> list[str]:
+    """Elimina tutte le collection il cui nome inizia con `prefix`.
+
+    Le collection di upload sono per sessione, e una sessione web non ha una chiusura su cui
+    agganciarsi in modo affidabile: si accumulerebbero. La pulizia avviene all'avvio del processo,
+    quando per definizione nessuna sessione precedente è più valida.
+    """
+    settings = settings or get_settings()
+    rimosse: list[str] = []
+    try:
+        client = get_vectorstore(settings)._client
+        for collection in client.list_collections():
+            nome = collection if isinstance(collection, str) else collection.name
+            if nome.startswith(prefix):
+                client.delete_collection(nome)
+                rimosse.append(nome)
+    except Exception:
+        return rimosse
+    return rimosse

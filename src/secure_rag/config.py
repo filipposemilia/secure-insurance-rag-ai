@@ -82,13 +82,30 @@ class Settings(BaseSettings):
         return self.chroma_base_dir / slug
 
     @property
-    def upload_collection_name(self) -> str:
-        """Collection separata per i documenti caricati dall'utente in sessione.
-
-        Tenerli fuori dalla collection principale evita che un file caricato da chiunque
-        contamini in modo permanente il corpus aziendale: si svuota senza toccare l'indice ufficiale.
-        """
+    def upload_collection_prefix(self) -> str:
+        """Prefisso comune delle collection di upload, usato per riconoscerle e ripulirle."""
         return f"{self.collection_name}_uploads"
+
+    @property
+    def upload_collection_name(self) -> str:
+        """Collection degli upload non isolata per sessione.
+
+        Resta per l'uso locale a utente singolo. Su un'istanza raggiungibile da più persone va
+        usata `upload_collection_for()`: qui un documento caricato sarebbe visibile a chiunque
+        abbia la clearance sufficiente.
+        """
+        return self.upload_collection_prefix
+
+    def upload_collection_for(self, session_id: str) -> str:
+        """Collection degli upload riservata a una singola sessione.
+
+        Tenere i file caricati fuori dalla collection principale evita che contaminino il corpus
+        aziendale; separarli **anche per sessione** evita che il documento di un visitatore
+        diventi leggibile dagli altri. Su un'istanza pubblica la sola clearance non basta: due
+        visitatori diversi con lo stesso ruolo si vedrebbero i documenti a vicenda.
+        """
+        pulito = "".join(carattere for carattere in session_id if carattere.isalnum() or carattere == "-")
+        return f"{self.upload_collection_prefix}_{pulito or 'anonimo'}"
 
     def with_provider(self, provider: ProviderName) -> "Settings":
         """Copia delle impostazioni con un provider diverso (usata dalla scelta interattiva)."""

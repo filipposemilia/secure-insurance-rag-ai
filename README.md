@@ -34,9 +34,11 @@ Tre schede, pensate per essere proiettate durante una discussione tecnica:
   istruzioni rivolte all'assistente.
 - **🛡️ Sicurezza** — i sei scenari di attacco eseguibili con un clic e l'audit trail in tabella.
 
-I documenti caricati vivono in una **collection separata** con clearance ereditata dal ruolo
-attivo: non contaminano il corpus aziendale, si svuotano con un pulsante, e un file caricato da un
-utente `management` resta invisibile a un `agent`.
+I documenti caricati vivono in una **collection separata e isolata per sessione**, con clearance
+ereditata dal ruolo attivo: non contaminano il corpus aziendale, non sono raggiungibili dagli altri
+visitatori, e un file caricato da un utente `management` resta invisibile a un `agent`. Togliendo un
+file dall'elenco i suoi chunk vengono eliminati dall'indice — ciò che l'interfaccia mostra e ciò che
+il retrieval può raggiungere devono coincidere.
 
 ## Quickstart
 
@@ -76,7 +78,7 @@ dimensione diversa: 1536 per `text-embedding-3-small`, 256 per quello determinis
 provider nuovo va eseguito `ingest` una volta per quel provider; gli indici già costruiti restano
 validi e si può alternare senza re-indicizzare.
 
-Demo guidata: `bash scripts/demo.sh openai` (o `fake`). Test: `.venv/bin/pytest -q` — 62 test, tutti
+Demo guidata: `bash scripts/demo.sh openai` (o `fake`). Test: `.venv/bin/pytest -q` — 91 test, tutti
 offline, nessuna API key richiesta.
 
 ## Architettura
@@ -136,11 +138,12 @@ src/secure_rag/
 └── security/
     ├── pii.py             masking con segnaposto stabili + vault
     ├── guardrails.py      input guard · context guard · output guard
+    ├── ratelimit.py       quota per visitatore e tetto di spesa (istanza pubblica)
     └── audit.py           audit trail JSONL
 
 app/streamlit_app.py       UI demo a schede: chat, upload documenti, sicurezza
 data/policies/             4 documenti sintetici, uno deliberatamente compromesso
-tests/                     82 test, nessuna chiamata di rete
+tests/                     91 test, nessuna chiamata di rete
 ```
 
 ## Deploy

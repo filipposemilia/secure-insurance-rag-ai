@@ -35,7 +35,9 @@ from secure_rag.uploads import SUPPORTED_SUFFIXES, UploadReport, process_upload 
 from secure_rag.vectorstore import (  # noqa: E402
     add_documents,
     collection_size,
+    drop_collections_with_prefix,
     index_documents,
+    remove_source,
     reset_collection,
 )
 
@@ -151,9 +153,30 @@ def get_provider_statuses() -> list[tuple[str, str, str, bool, str]]:
     ]
 
 
+@st.cache_resource(show_spinner=False)
+def pulisci_upload_orfani() -> list[str]:
+    """Elimina le collection di upload rimaste da esecuzioni precedenti.
+
+    Gira una sola volta per processo, grazie alla cache. Una sessione web non ha una chiusura
+    affidabile su cui agganciare la pulizia: il momento sicuro è l'avvio, quando nessuna sessione
+    precedente è più valida.
+    """
+    base = get_settings()
+    return drop_collections_with_prefix(base.upload_collection_prefix, base)
+
+
 def upload_settings(settings: Settings) -> Settings:
-    """Impostazioni puntate alla collection dei documenti caricati in sessione."""
-    return settings.with_collection(settings.upload_collection_name)
+    """Impostazioni puntate alla collection di upload **della sessione corrente**.
+
+    L'isolamento per sessione è ciò che impedisce che un documento caricato da un visitatore
+    diventi leggibile dagli altri: su un'istanza pubblica la sola clearance non basterebbe, perché
+    due persone diverse con lo stesso ruolo si vedrebbero i file a vicenda.
+    """
+    if "session_token" not in st.session_state:
+        st.session_state["session_token"] = f"sessione-{uuid4().hex[:12]}"
+    return settings.with_collection(
+        settings.upload_collection_for(st.session_state["session_token"])
+    )
 
 
 def run_ingestion(settings: Settings) -> dict:
@@ -174,6 +197,7 @@ def run_ingestion(settings: Settings) -> dict:
 # ---------------------------------------------------------------------------
 
 base_settings = get_settings()
+pulisci_upload_orfani()  # una volta per processo: rimuove gli upload di sessioni concluse
 statuses = get_provider_statuses()
 selectable = [status for status in statuses if status[3]]
 
@@ -524,7 +548,10 @@ with tab_docs:
         "Un file caricato è **input non fidato**: riceve lo stesso trattamento del corpus "
         "aziendale — anonimizzazione PII prima dell'embedding, scansione anti prompt injection, "
         "clearance ereditata dal ruolo attivo — più due controlli di ingresso: dimensione massima "
-        f"{settings.max_upload_mb:.0f} MB e {settings.max_upload_chunks} chunk (mitigazione LLM04)."
+        f"{settings.max_upload_mb:.0f} MB e {settings.max_upload_chunks} chunk (mitigazione LLM04).\n\n"
+        "I documenti restano **isolati nella tua sessione**: nessun altro visitatore può "
+        "raggiungerli. Togliendo un file dall'elenco i suoi chunk vengono eliminati dall'indice, "
+        "e tutto viene comunque rimosso alla chiusura della sessione."
     )
 
     uploaded_files = st.file_uploader(
@@ -532,6 +559,37 @@ with tab_docs:
         type=[suffix.lstrip(".") for suffix in SUPPORTED_SUFFIXES],
         accept_multiple_files=True,
     )
+
+    # Allineamento fra ciò che l'utente vede e ciò che il retrieval può raggiungere.
+    # Togliere un file dall'elenco deve eliminarne i chunk: altrimenti un documento caricato per
+    # errore resterebbe interrogabile pur non comparendo più da nessuna parte nell'interfaccia.
+    nomi_presenti = {uploaded.name for uploaded in (uploaded_files or [])}
+    nomi_indicizzati = {
+        report.file_name for report in st.session_state["upload_reports"] if report.accepted
+    }
+    rimossi = nomi_indicizzati - nomi_presenti
+
+    if rimossi:
+        for nome in rimossi:
+            remove_source(nome, upload_settings(settings))
+        st.session_state["upload_reports"] = [
+            report
+            for report in st.session_state["upload_reports"]
+            if report.file_name not in rimossi
+        ]
+        st.session_state["processed_uploads"] = {
+            impronta
+            for impronta in st.session_state["processed_uploads"]
+            if impronta.split(":", 1)[0] not in rimossi
+        }
+        st.session_state["ultima_rimozione"] = sorted(rimossi)
+        st.rerun()
+
+    if avviso := st.session_state.pop("ultima_rimozione", None):
+        st.success(
+            "Rimossi dall'indice e non più interrogabili: " + ", ".join(f"`{n}`" for n in avviso),
+            icon="🧹",
+        )
 
     if uploaded_files:
         masker = PIIMasker()

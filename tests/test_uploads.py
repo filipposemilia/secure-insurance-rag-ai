@@ -7,9 +7,18 @@ from pathlib import Path
 import pytest
 
 from secure_rag.config import Settings
+from secure_rag.ingestion import build_documents
 from secure_rag.rag import SecureRAGPipeline
 from secure_rag.uploads import extract_text, process_upload
-from secure_rag.vectorstore import add_documents, collection_size, reset_collection
+from secure_rag.vectorstore import (
+    add_documents,
+    collection_size,
+    drop_collections_with_prefix,
+    get_retriever,
+    index_documents,
+    remove_source,
+    reset_collection,
+)
 
 POLIZZA = """
 POLIZZA VITA — N. VIT-2026-777
@@ -198,3 +207,79 @@ def test_lo_scope_e_tracciato_nella_risposta_e_nell_audit(settings: Settings):
     record = pipeline.audit.tail(1)[0]
     assert record["scope"] == "uploads"
     assert record["uploaded_sources"] == ["polizza.md"]
+
+
+# ------------------------------------------- isolamento e rimozione degli upload
+
+
+def test_ogni_sessione_ha_la_propria_collection(settings: Settings):
+    """Su un'istanza pubblica la clearance non basta: due visitatori con lo stesso ruolo
+    non devono vedersi i documenti a vicenda."""
+    prima = settings.upload_collection_for("sessione-aaa")
+    seconda = settings.upload_collection_for("sessione-bbb")
+
+    assert prima != seconda
+    assert prima.startswith(settings.upload_collection_prefix)
+    assert seconda.startswith(settings.upload_collection_prefix)
+
+
+def test_il_nome_della_collection_e_ripulito(settings: Settings):
+    """Il token finisce in un nome di collection: i caratteri inattesi vanno scartati."""
+    nome = settings.upload_collection_for("../../etc/passwd")
+
+    assert "/" not in nome
+    assert "." not in nome.removeprefix(settings.upload_collection_prefix)
+
+
+def test_rimuovere_un_documento_lo_rende_non_recuperabile(settings: Settings):
+    """Regressione: togliere un file dall'elenco deve eliminarne i chunk dall'indice.
+
+    Un documento caricato per errore non deve restare interrogabile pur non comparendo più
+    nell'interfaccia.
+    """
+    upload = settings.with_collection(settings.upload_collection_for("sessione-test-rimozione"))
+    reset_collection(upload)
+
+    primo, _ = process_upload(
+        "riservato.md", b"# Riservato\n\nIl massimale della garanzia incendio e' 250.000 EUR.",
+        clearance="agent", settings=settings,
+    )
+    secondo, _ = process_upload(
+        "pubblico.md", b"# Pubblico\n\nLa franchigia ordinaria e' 500 EUR.",
+        clearance="agent", settings=settings,
+    )
+    add_documents(primo, upload)
+    add_documents(secondo, upload)
+    assert collection_size(upload) == len(primo) + len(secondo)
+
+    rimossi = remove_source("riservato.md", upload)
+
+    assert rimossi == len(primo)
+    assert collection_size(upload) == len(secondo)
+
+    fonti = {
+        documento.metadata["source"]
+        for documento in get_retriever("agent", upload).invoke("massimale garanzia incendio")
+    }
+    assert "riservato.md" not in fonti
+
+
+def test_la_pulizia_elimina_solo_le_collection_di_upload(settings: Settings):
+    """Il corpus aziendale non deve essere toccato dalla pulizia delle sessioni."""
+    documenti, _ = build_documents(settings)
+    index_documents(documenti, settings)
+    corpus_prima = collection_size(settings)
+
+    upload = settings.with_collection(settings.upload_collection_for("sessione-da-pulire"))
+    chunk, _ = process_upload(
+        "temporaneo.md", b"# Temporaneo\n\nContenuto di prova per la sessione.",
+        clearance="agent", settings=settings,
+    )
+    add_documents(chunk, upload)
+    assert collection_size(upload) > 0
+
+    rimosse = drop_collections_with_prefix(settings.upload_collection_prefix, settings)
+
+    assert any("sessione-da-pulire" in nome for nome in rimosse)
+    assert collection_size(upload) == 0
+    assert collection_size(settings) == corpus_prima, "il corpus non va toccato"

@@ -40,12 +40,17 @@ specifici:
 | Anonimizzazione PII **prima** dell'indicizzazione | Che i dati personali del file caricato raggiungano il provider LLM | `uploads.py`, `security/pii.py` |
 | Scansione anti-injection al momento del caricamento, con referto all'utente | Che un payload nascosto agisca prima che qualcuno se ne accorga | `uploads.py`, `security/guardrails.py::scan_context` |
 
-Due proprietà di isolamento:
+Quattro proprietà di isolamento:
 
 - i documenti caricati vanno in una **collection separata**, svuotabile, che non contamina in modo
   permanente il corpus aziendale;
 - ereditano la **clearance del ruolo che li ha caricati**, quindi un file caricato dalla direzione
-  non diventa visibile alla rete agenziale attraverso la chat.
+  non diventa visibile alla rete agenziale attraverso la chat;
+- la collection è **per sessione**: su un'istanza raggiungibile da più persone la sola clearance non
+  basterebbe, perché due visitatori con lo stesso ruolo si vedrebbero i documenti a vicenda;
+- **togliere un file dall'elenco ne elimina i chunk** dall'indice, e le collection rimaste da
+  sessioni concluse vengono rimosse all'avvio del processo. Un documento caricato per errore non
+  deve restare interrogabile dopo essere sparito dall'interfaccia.
 
 I chunk sospetti vengono indicizzati e marcati, non scartati: il context guard li esclude comunque
 a ogni interrogazione. Così l'attacco resta visibile nell'audit trail invece di sparire in silenzio,

@@ -228,3 +228,30 @@ solo percorso verso l'applicazione passa dal reverse proxy, che sovrascrive l'he
 La configurazione del proxy non è un dettaglio operativo ma parte del modello di sicurezza, ed è
 per questo documentata in `docs/DEPLOY.md` insieme alla verifica che l'audit registri l'indirizzo
 reale del visitatore e non quello del proxy.
+
+---
+
+## ADR-015 — Collection di upload per sessione, e indice allineato a ciò che l'utente vede
+
+**Contesto.** Emerso in esercizio, sull'istanza pubblica. Due difetti distinti che si sommavano:
+
+1. La collection degli upload era **unica per istanza**. Bastava che un visitatore caricasse un
+   documento perché diventasse raggiungibile da chiunque altro avesse clearance sufficiente: la
+   clearance separa i ruoli, non le persone. Era dichiarato in roadmap come accettabile «per una
+   demo locale» — una motivazione decaduta nel momento in cui l'istanza è stata pubblicata, senza
+   che la voce venisse rivalutata.
+2. Togliere un file dall'elenco **non ne rimuoveva i chunk**: l'unico svuotamento era il pulsante
+   che azzerava tutto. Un documento caricato per errore restava interrogabile e continuava a
+   comparire fra le fonti pur essendo sparito dall'interfaccia.
+
+**Decisione.** La collection è derivata dal token di sessione (`upload_collection_for()`), lo stesso
+usato per i limiti di frequenza. La rimozione di un file dall'elenco elimina i suoi chunk
+(`remove_source()`), e le collection rimaste da sessioni precedenti vengono cancellate all'avvio del
+processo (`drop_collections_with_prefix()`), perché una sessione web non offre una chiusura su cui
+agganciarsi in modo affidabile.
+
+**Conseguenze.** Ciò che l'interfaccia mostra e ciò che il retrieval può raggiungere coincidono: è
+questa la proprietà che conta, perché un utente giudica cosa il sistema "sa" da cosa vede. Il token
+di sessione entra in un nome di collection, quindi viene ripulito dei caratteri non alfanumerici.
+Resta un limite: l'isolamento vale per sessione del browser, non per identità verificata — chi
+riapre il link ottiene una sessione nuova e vuota, che per una demo è il comportamento desiderabile.
