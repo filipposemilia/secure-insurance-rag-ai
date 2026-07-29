@@ -24,8 +24,9 @@ future work vincolato all'hardware.
 
 ## Future work
 
-Non implementato per scelta, dato il vincolo di tempo di 24 ore. Ogni voce indica cosa
-aggiungerebbe e perché è stata esclusa.
+Non implementato per scelta. Ogni voce indica cosa aggiungerebbe e perché è stata esclusa: alcune
+sono state escluse dal vincolo di tempo iniziale, altre — quelle segnate come vincolate all'hardware
+— dalle risorse della macchina che ospita l'istanza pubblica.
 
 ### Sicurezza
 
@@ -65,6 +66,5 @@ aggiungerebbe e perché è stata esclusa.
 
 | Voce | Cosa aggiunge | Perché non ora | Sforzo |
 | :--- | :--- | :--- | :--- |
-| **Docker Compose** | Ambiente riproducibile con vector store esterno | `uv` rende l'avvio locale già immediato | ~2 h |
 | **Export dell'audit verso SIEM** | Correlazione degli eventi di sicurezza con il resto dell'infrastruttura | Il formato JSONL è già pronto per essere spedito | ~2 h |
 | **Suite di red teaming** | Batteria sistematica di attacchi con metriche di elusione | I sei scenari attuali sono casi scelti, non una suite statistica | ~1 g |
