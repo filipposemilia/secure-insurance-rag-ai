@@ -339,9 +339,11 @@ def run_query(question: str, scope: str, as_role: str | None = None) -> RAGRespo
             question, role=ruolo_effettivo, scope=scope, rate_limit=verdetto.rule
         )
 
-    # La quota si consuma solo se il modello in rete è stato davvero interrogato: una query
-    # bloccata dai guard, o servita offline, non è costata nulla.
-    if provider_effettivo != "fake" and not response.blocked:
+    # La quota si consuma solo se il modello in rete è stato davvero interrogato. `prompt_sent` è
+    # popolato unicamente quando la catena LCEL viene invocata: resta vuoto sia per le query
+    # bloccate dai guard, sia quando il retrieval non restituisce nulla — per esempio cercando fra
+    # i documenti caricati quando non ce ne sono. In nessuno dei due casi è stato speso un token.
+    if provider_effettivo != "fake" and response.prompt_sent:
         limiter.record(identity)
 
     return response
@@ -412,15 +414,24 @@ with tab_chat:
     )
 
     session_chunks = collection_size(upload_settings(settings))
-    scope_options = ["corpus", "uploads", "both"] if session_chunks else ["corpus"]
     scope = st.radio(
         "Dove cercare",
-        options=scope_options,
+        options=["corpus", "uploads", "both"],
         format_func=lambda value: SCOPE_LABELS[value],
         horizontal=True,
-        help="I documenti caricati vivono in una collection separata: non contaminano il corpus.",
+        help=(
+            "I documenti caricati vivono in una collection separata dal corpus aziendale: "
+            "restano interrogabili a parte e non lo contaminano."
+        ),
     )
-    if session_chunks == 0:
+    if session_chunks == 0 and scope in ("uploads", "both"):
+        st.warning(
+            "Nessun documento caricato in questa sessione: questo ambito non ha ancora nulla su "
+            "cui cercare. Caricane uno dalla scheda **Documenti** — anche una perizia con "
+            "istruzioni nascoste, per vedere il referto di sicurezza.",
+            icon="📎",
+        )
+    elif session_chunks == 0:
         st.caption("Carica un documento dalla scheda **Documenti** per interrogarlo direttamente.")
 
     if collection_size(settings) == 0:

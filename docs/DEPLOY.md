@@ -1,6 +1,6 @@
 # Deploy dell'istanza pubblica
 
-Procedura per pubblicare la demo su `insurai.aicorelabs.io`, dietro Nginx Proxy Manager.
+Procedura per pubblicare la demo su `insurag.aicorelabs.io`, dietro Nginx Proxy Manager.
 
 ## Modello di esposizione
 
@@ -19,12 +19,12 @@ Record **A** presso il gestore del dominio:
 
 | Tipo | Nome | Valore |
 | :--- | :--- | :--- |
-| A | `insurai` | indirizzo IP pubblico della VPS |
+| A | `insurag` | indirizzo IP pubblico della VPS |
 
 Verifica prima di procedere, perché Let's Encrypt fallisce se il nome non risolve:
 
 ```bash
-dig +short insurai.aicorelabs.io
+dig +short insurag.aicorelabs.io
 ```
 
 ## 2. Configurazione sulla VPS
@@ -76,7 +76,7 @@ docker compose ps              # lo stato deve essere "healthy"
 
 | Campo | Valore |
 | :--- | :--- |
-| Domain Names | `insurai.aicorelabs.io` |
+| Domain Names | `insurag.aicorelabs.io` |
 | Scheme | `http` |
 | Forward Hostname / IP | IP del container o `host.docker.internal` |
 | Forward Port | `8501` |
@@ -104,7 +104,7 @@ sulla stessa rete Docker e indirizza il container per nome (`secure-rag`).
 ## 5. Verifica finale
 
 ```bash
-curl -sI https://insurai.aicorelabs.io | head -1        # atteso: 200
+curl -sI https://insurag.aicorelabs.io | head -1        # atteso: 200
 ```
 
 Poi dal browser:
@@ -143,7 +143,7 @@ docker compose up -d --build
 | Il container riparte in ciclo | Ingestion fallita | `docker compose logs`: quasi sempre `OPENAI_API_KEY` mancante o senza credito |
 | Nei log compare `Provider attivo: fake` | `.env` copiato da `.env.example` | L'esempio contiene `LLM_PROVIDER=fake`: va cambiato in `openai`, altrimenti l'istanza risponde offline |
 | Ingestion a ogni riavvio | Volume non montato | Verificare `chroma-index` in `docker volume ls` |
-| Emissione del certificato fallita | DNS non propagato | `dig +short insurai.aicorelabs.io` e riprovare |
+| Emissione del certificato fallita | DNS non propagato | `dig +short insurag.aicorelabs.io` e riprovare |
 
 ## Limiti dichiarati di questo deployment
 

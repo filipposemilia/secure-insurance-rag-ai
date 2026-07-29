@@ -156,6 +156,30 @@ def test_a_quota_esaurita_la_richiesta_non_raggiunge_il_modello(indexed_app, mon
     assert not esito.sources
 
 
+def test_i_tre_ambiti_di_ricerca_sono_sempre_disponibili(indexed_app):
+    """Le opzioni non compaiono solo quando esistono documenti caricati.
+
+    Nasconderle finché la collection degli upload è vuota rende invisibile una funzione del
+    sistema a chi apre la demo per la prima volta.
+    """
+    app = run_app()
+
+    # `options` restituisce le etichette già passate da `format_func`, non i valori interni.
+    assert set(app.radio[0].options) == {
+        "Corpus aziendale",
+        "Solo documenti caricati",
+        "Corpus + documenti caricati",
+    }
+
+
+def test_ambito_senza_documenti_caricati_avvisa_invece_di_rispondere_a_vuoto(indexed_app):
+    app = run_app()
+
+    app.radio[0].set_value("uploads").run()
+
+    assert any("Nessun documento caricato" in str(w.value) for w in app.warning)
+
+
 def test_il_provider_offline_non_consuma_quota(indexed_app, monkeypatch):
     """Il limite protegge la spesa, non l'uso: senza costo non c'è ragione di limitare.
 
