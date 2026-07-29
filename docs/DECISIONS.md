@@ -188,3 +188,43 @@ scenario.role)`, e l'esito compare nella scheda in cui è stato lanciato. Il mec
 scenari 5 e 6 sono confrontabili con due click. Il ruolo di ciascuno scenario è dichiarato sulla
 scheda, così chi guarda vede che la differenza sta nella clearance e non nella domanda. La UI, che
 non era coperta da alcun test, ha ora cinque test di regressione in `tests/test_streamlit_ui.py`.
+
+---
+
+## ADR-013 — Al tetto di spesa si degrada, non si blocca
+
+**Contesto.** Esporre pubblicamente l'istanza con una API key a carico di chi la pubblica apre il
+rischio LLM04: chiunque può consumare token altrui. Serve un tetto, ma un tetto che rifiuti le
+richieste trasforma un limite di costo in un'interruzione di servizio — cioè proprio il denial of
+service da cui ci si difende. Chi arriva per ultimo troverebbe una demo che non risponde.
+
+**Decisione.** Due soglie con esiti diversi (`security/ratelimit.py`):
+- **quota oraria per visitatore** → la richiesta viene rifiutata; protegge dal singolo abusante;
+- **tetto giornaliero complessivo** → la richiesta viene servita dal provider deterministico
+  offline, dichiarandolo nell'interfaccia.
+
+La quota si consuma **solo** quando il modello in rete viene davvero interrogato: una query fermata
+dai guard, o servita offline, non è costata nulla e non intacca il budget di chi la subisce. Per
+questo `check()` e `record()` sono separati.
+
+**Conseguenze.** Il link resta sempre navigabile e la spesa ha un massimo garantito. La pipeline
+non sa di essere esposta: il limite è applicato dall'entry point pubblico (`app/streamlit_app.py`),
+mentre la CLI, che è locale, resta senza limiti. I contatori vivono in memoria: corretto per un
+container singolo, insufficiente con più repliche — dichiarato in `docs/SECURITY.md` invece di
+essere taciuto.
+
+---
+
+## ADR-014 — Porta esposta solo su loopback
+
+**Contesto.** I limiti di frequenza identificano il visitatore tramite `X-Forwarded-For`, un header
+che il client può scrivere a piacere. Se il container fosse raggiungibile direttamente
+dall'esterno, chiunque potrebbe falsificarlo e presentarsi ogni volta come un visitatore diverso.
+
+**Decisione.** `docker-compose.yml` pubblica la porta su `127.0.0.1:8501` e non su `0.0.0.0`. Il
+solo percorso verso l'applicazione passa dal reverse proxy, che sovrascrive l'header.
+
+**Conseguenze.** L'header diventa attendibile perché esiste un unico punto di ingresso controllato.
+La configurazione del proxy non è un dettaglio operativo ma parte del modello di sicurezza, ed è
+per questo documentata in `docs/DEPLOY.md` insieme alla verifica che l'audit registri l'indirizzo
+reale del visitatore e non quello del proxy.

@@ -20,6 +20,7 @@ audit trail ricostruibile.
 | 📋 | **Audit trail** JSONL con hash della domanda (mai il testo), fonti, quarantene e verdetti dei guard. | `secure-rag audit` |
 | 🔌 | **Provider intercambiabile**: OpenAI, Azure OpenAI, Ollama on-premise, o `fake` per girare offline. | `.env` |
 | 📎 | **Upload di documenti in chat** con referto di sicurezza immediato: PII rimosse, confronto prima/dopo e rilevamento di istruzioni nascoste, prima ancora della prima domanda. | scheda **Documenti** |
+| ⏱️ | **Limiti di frequenza** sull'istanza pubblica: quota per visitatore e tetto di spesa giornaliero che **degrada al motore offline** invece di rifiutare le richieste. | `security/ratelimit.py` |
 
 ## L'interfaccia
 
@@ -139,16 +140,33 @@ src/secure_rag/
 
 app/streamlit_app.py       UI demo a schede: chat, upload documenti, sicurezza
 data/policies/             4 documenti sintetici, uno deliberatamente compromesso
-tests/                     62 test, nessuna chiamata di rete
+tests/                     82 test, nessuna chiamata di rete
 ```
+
+## Deploy
+
+L'istanza pubblica gira in container dietro un reverse proxy con TLS:
+
+```bash
+cp .env.example .env      # provider, API key e limiti di frequenza
+docker compose up -d --build
+```
+
+Al primo avvio il container indicizza il corpus (anonimizzazione inclusa) e lo conserva su un
+volume, così i riavvii successivi non ripagano gli embedding. La porta è pubblicata **solo su
+loopback**: l'unico percorso verso l'applicazione passa dal proxy, ed è ciò che rende attendibile
+l'header `X-Forwarded-For` su cui si basano i limiti di frequenza.
+
+Procedura completa, configurazione del proxy e problemi frequenti: **[docs/DEPLOY.md](docs/DEPLOY.md)**.
 
 ## Documentazione
 
 - **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** — i quattro layer, il flusso di una richiesta, i punti di estensione
 - **[docs/SECURITY.md](docs/SECURITY.md)** — threat model, mapping OWASP Top 10 for LLM, limiti dichiarati
-- **[docs/DECISIONS.md](docs/DECISIONS.md)** — ADR: perché il masking a monte, perché i guard fuori dalla catena, perché chunk da 800
+- **[docs/DECISIONS.md](docs/DECISIONS.md)** — ADR: perché il masking a monte, perché i guard fuori dalla catena, perché al tetto di spesa si degrada invece di bloccare
+- **[docs/DEPLOY.md](docs/DEPLOY.md)** — pubblicazione in container dietro reverse proxy
 - **[ROADMAP.md](ROADMAP.md)** — cosa manca e con quale sforzo (Presidio, LangGraph, hybrid search, Qdrant…)
 
 ## Stack
 
-Python 3.12 · LangChain (LCEL) · ChromaDB · Streamlit · pydantic-settings · pytest · uv
+Python 3.12 · LangChain (LCEL) · ChromaDB · Streamlit · pydantic-settings · pytest · uv · Docker

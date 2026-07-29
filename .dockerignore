@@ -1,0 +1,33 @@
+# Contesto di build ridotto al minimo: build più rapide e nessun rischio di far entrare
+# nell'immagine file che devono restare locali.
+
+# Ambiente e artefatti
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Segreti: le variabili arrivano da env_file a runtime, non devono finire in un livello
+# dell'immagine (dove resterebbero leggibili anche se cancellate in un livello successivo).
+.env
+.env.*
+!.env.example
+
+# Artefatti runtime: l'indice viene ricostruito dall'entrypoint, i log stanno su volume
+chroma_db/
+logs/
+*.jsonl
+
+# Cronologia e strumenti di sviluppo: l'immagine contiene solo ciò che serve a eseguire.
+# Il Dockerfile copia comunque percorsi espliciti, quindi questo elenco riduce il contesto di
+# build senza essere l'unica difesa.
+.git/
+.github/
+tests/
+docs/
+scripts/
+
+.DS_Store
+.idea/
+.vscode/

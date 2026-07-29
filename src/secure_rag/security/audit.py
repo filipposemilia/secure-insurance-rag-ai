@@ -39,6 +39,9 @@ class AuditRecord:
     output_rule: str = ""
     latency_ms: int = 0
     provider: str = ""
+    # Esito del controllo di frequenza sull'istanza pubblica: distingue una richiesta servita
+    # normalmente da una degradata al provider offline o rifiutata per quota esaurita.
+    rate_limit: str = ""
 
     def to_json(self) -> str:
         return json.dumps(asdict(self), ensure_ascii=False)

@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from uuid import uuid4
 
 import streamlit as st
 
@@ -27,7 +28,9 @@ from secure_rag.config import Settings, get_settings  # noqa: E402
 from secure_rag.ingestion import CLEARANCE_LEVELS, build_documents  # noqa: E402
 from secure_rag.providers import describe_provider, probe_providers  # noqa: E402
 from secure_rag.rag import RAGResponse, SecureRAGPipeline  # noqa: E402
+from secure_rag.security.audit import AuditRecord, hash_query, utc_now  # noqa: E402
 from secure_rag.security.pii import PIIMasker  # noqa: E402
+from secure_rag.security.ratelimit import RateLimiter, client_identity  # noqa: E402
 from secure_rag.uploads import SUPPORTED_SUFFIXES, UploadReport, process_upload  # noqa: E402
 from secure_rag.vectorstore import (  # noqa: E402
     add_documents,
@@ -36,7 +39,58 @@ from secure_rag.vectorstore import (  # noqa: E402
     reset_collection,
 )
 
-st.set_page_config(page_title="Secure Insurance RAG", page_icon="🛡️", layout="wide")
+st.set_page_config(
+    page_title="Secure Insurance RAG",
+    page_icon="🛡️",
+    layout="wide",
+    menu_items={"about": "PoC di RAG sicuro su documentazione assicurativa sintetica."},
+)
+
+# Ritocchi mirati: compattano l'intestazione, rendono le schede leggibili da proiettore e danno
+# alle metriche un contenitore riconoscibile. Nessuna riscrittura dei componenti nativi.
+st.markdown(
+    """
+    <style>
+      .block-container { padding-top: 2.2rem; max-width: 1280px; }
+      header[data-testid="stHeader"] { background: transparent; }
+
+      .stTabs [data-baseweb="tab-list"] { gap: .35rem; }
+      .stTabs [data-baseweb="tab"] {
+        padding: .55rem 1.1rem;
+        border-radius: .5rem .5rem 0 0;
+        font-weight: 600;
+      }
+
+      div[data-testid="stMetric"] {
+        background: rgba(255,255,255,.03);
+        border: 1px solid rgba(255,255,255,.08);
+        border-radius: .6rem;
+        padding: .7rem .9rem;
+      }
+      div[data-testid="stMetricValue"] { font-size: 1.05rem; }
+
+      .app-hero {
+        border: 1px solid rgba(47,129,247,.35);
+        background: linear-gradient(135deg, rgba(47,129,247,.10), rgba(47,129,247,.02));
+        border-radius: .75rem;
+        padding: 1rem 1.2rem;
+        margin-bottom: 1.1rem;
+      }
+      .app-hero h1 { font-size: 1.45rem; margin: 0 0 .3rem 0; }
+      .app-hero p { margin: 0; opacity: .8; font-size: .92rem; line-height: 1.5; }
+      .app-chips { margin-top: .7rem; display: flex; flex-wrap: wrap; gap: .4rem; }
+      .app-chip {
+        font-size: .75rem;
+        padding: .2rem .6rem;
+        border-radius: 999px;
+        border: 1px solid rgba(255,255,255,.14);
+        background: rgba(255,255,255,.04);
+        white-space: nowrap;
+      }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
 ROLE_LABELS = {
     "public": "Cliente (documenti pubblici)",
@@ -60,6 +114,32 @@ SCOPE_LABELS = {
 def get_pipeline(provider: str) -> SecureRAGPipeline:
     """Pipeline riusata tra i rerun. La chiave di cache è il provider attivo."""
     return SecureRAGPipeline(get_settings().with_provider(provider))
+
+
+@st.cache_resource(show_spinner=False)
+def get_rate_limiter() -> RateLimiter:
+    """Contatori di frequenza condivisi fra tutte le sessioni del processo.
+
+    Devono stare in `cache_resource` e non in `session_state`: un limite per sessione sarebbe
+    aggirabile aprendo una scheda nuova.
+    """
+    return RateLimiter(get_settings())
+
+
+def visitor_identity() -> str:
+    """Identità del visitatore, dagli header inoltrati dal reverse proxy.
+
+    Fuori da un deployment con proxy (esecuzione locale, test) gli header non ci sono: si ripiega
+    su un identificativo di sessione, che tiene il comportamento coerente senza fingere di
+    conoscere l'indirizzo reale.
+    """
+    if "session_token" not in st.session_state:
+        st.session_state["session_token"] = f"sessione-{uuid4().hex[:12]}"
+    try:
+        headers = dict(st.context.headers)
+    except Exception:  # fuori da un contesto di script (AppTest, esecuzione bare)
+        headers = {}
+    return client_identity(headers, fallback=st.session_state["session_token"])
 
 
 @st.cache_data(ttl=30, show_spinner=False)
@@ -167,6 +247,14 @@ with st.sidebar:
 
 def render_response(response: RAGResponse) -> None:
     """Mostra risposta, esiti di sicurezza e fonti."""
+    if response.rate_limit == "quota_globale":
+        st.info(
+            "Tetto giornaliero di richieste al modello in rete raggiunto: questa risposta è stata "
+            "prodotta dal motore deterministico offline. La pipeline di sicurezza è la stessa; "
+            "cambia solo chi genera il testo.",
+            icon="🔌",
+        )
+
     if response.blocked:
         st.error(response.answer, icon="🛑")
     else:
@@ -208,9 +296,55 @@ def run_query(question: str, scope: str, as_role: str | None = None) -> RAGRespo
     `as_role` permette a uno scenario di girare con il **proprio** ruolo invece che con quello
     selezionato in barra laterale: è ciò che rende confrontabili gli scenari 5 e 6, che pongono la
     stessa domanda con clearance diverse.
+
+    Qui viene applicato anche il limite di frequenza, perché questa è la superficie pubblica: la
+    pipeline non sa di essere esposta in rete, e non deve saperlo.
     """
+    ruolo_effettivo = as_role or role
+    limiter = get_rate_limiter()
+    identity = visitor_identity()
+    verdetto = limiter.check(identity)
+
+    if verdetto.blocked:
+        # Nessuna chiamata al modello e nessun retrieval: la richiesta si ferma qui, ma resta
+        # tracciata, perché un tentativo oltre quota è un segnale operativo.
+        get_pipeline(provider).audit.log(
+            AuditRecord(
+                timestamp=utc_now(),
+                role=ruolo_effettivo,
+                query_hash=hash_query(question),
+                query_length=len(question),
+                input_verdict="blocked",
+                input_rule=verdetto.rule,
+                scope=scope,
+                provider=describe_provider(settings),
+                rate_limit=verdetto.rule,
+            )
+        )
+        return RAGResponse(
+            answer=f"Richiesta non servita: {verdetto.reason}",
+            role=ruolo_effettivo,
+            blocked=True,
+            blocked_stage="rate_limit",
+            scope=scope,
+            provider=describe_provider(settings),
+            rate_limit=verdetto.rule,
+        )
+
+    # Tetto giornaliero raggiunto: si risponde comunque, ma senza spendere token.
+    provider_effettivo = "fake" if verdetto.degraded else provider
+
     with st.spinner("Elaborazione con controlli di sicurezza…"):
-        return get_pipeline(provider).answer(question, role=as_role or role, scope=scope)
+        response = get_pipeline(provider_effettivo).answer(
+            question, role=ruolo_effettivo, scope=scope, rate_limit=verdetto.rule
+        )
+
+    # La quota si consuma solo se il modello in rete è stato davvero interrogato: una query
+    # bloccata dai guard, o servita offline, non è costata nulla.
+    if provider_effettivo != "fake" and not response.blocked:
+        limiter.record(identity)
+
+    return response
 
 
 def ask(question: str, scope: str) -> None:
@@ -226,6 +360,42 @@ def ask(question: str, scope: str) -> None:
 st.session_state.setdefault("history", [])
 st.session_state.setdefault("upload_reports", [])
 st.session_state.setdefault("processed_uploads", set())
+
+
+# --- Intestazione: cosa sta guardando chi apre il link -----------------------
+_chips = [
+    "PII mascherate prima dell'embedding",
+    "Guardrail su input, contesto e output",
+    "RBAC applicato al retrieval",
+    "Audit trail di ogni interazione",
+]
+st.markdown(
+    "<div class='app-hero'>"
+    "<h1>🛡️ Secure Insurance RAG</h1>"
+    "<p>Assistente sulla documentazione di polizza con i controlli di sicurezza in evidenza: "
+    "ogni risposta mostra quali documenti sono stati recuperati per il ruolo attivo, quali sono "
+    "stati messi in quarantena e quale prompt è arrivato al modello.</p>"
+    "<div class='app-chips'>"
+    + "".join(f"<span class='app-chip'>{voce}</span>" for voce in _chips)
+    + "</div></div>",
+    unsafe_allow_html=True,
+)
+
+if settings.rate_limit_enabled:
+    _residue_ip, _residue_globali = get_rate_limiter().snapshot(visitor_identity())
+    intestazione, quota_visitatore, quota_totale = st.columns([2, 1, 1])
+    intestazione.caption(
+        "Documenti **sintetici**: nomi, codici fiscali, IBAN e partite IVA sono inventati. "
+        "Istanza dimostrativa con limiti di frequenza attivi."
+    )
+    quota_visitatore.metric("Domande residue", _residue_ip)
+    quota_totale.metric("Quota giornaliera", _residue_globali)
+    if _residue_globali == 0:
+        st.info(
+            "Il tetto giornaliero di richieste al modello in rete è esaurito: la demo continua a "
+            "funzionare con il motore deterministico offline.",
+            icon="🔌",
+        )
 
 tab_chat, tab_docs, tab_security = st.tabs(["💬 Chat", "📎 Documenti", "🛡️ Sicurezza"])
 

@@ -114,3 +114,60 @@ def test_lo_scenario_di_injection_diretta_resta_bloccato_dalla_ui(indexed_app):
     esito = app.session_state["scenario_result"]["response"]
     assert esito.blocked
     assert esito.blocked_stage == "input"
+
+
+# ------------------------------------------------------- limiti di frequenza
+
+
+def limiti(monkeypatch, per_ip: str) -> None:
+    """Attiva i limiti di frequenza sull'app sotto test."""
+    import streamlit as st
+
+    monkeypatch.setenv("RATE_LIMIT_ENABLED", "true")
+    monkeypatch.setenv("RATE_LIMIT_PER_IP_HOUR", per_ip)
+    monkeypatch.setenv("RATE_LIMIT_GLOBAL_DAY", "500")
+    get_settings.cache_clear()
+    st.cache_resource.clear()  # il RateLimiter è condiviso fra le sessioni: va ricreato
+
+
+@pytest.fixture(autouse=True)
+def ripristina_impostazioni():
+    """Le variabili d'ambiente sono per-processo: ogni test riparte pulito."""
+    import streamlit as st
+
+    yield
+    get_settings.cache_clear()
+    st.cache_resource.clear()
+
+
+def test_a_quota_esaurita_la_richiesta_non_raggiunge_il_modello(indexed_app, monkeypatch):
+    """Con la quota esaurita la pipeline non viene nemmeno interpellata."""
+    limiti(monkeypatch, per_ip="0")
+    app = run_app()
+
+    app.button(key="scenario_0").click().run()
+    esito = app.session_state["scenario_result"]["response"]
+
+    assert esito.blocked
+    assert esito.blocked_stage == "rate_limit"
+    assert esito.rate_limit == "quota_visitatore"
+    # Nessuna chiamata al modello significa nessun prompt costruito e nessun token speso.
+    assert esito.prompt_sent == ""
+    assert not esito.sources
+
+
+def test_il_provider_offline_non_consuma_quota(indexed_app, monkeypatch):
+    """Il limite protegge la spesa, non l'uso: senza costo non c'è ragione di limitare.
+
+    L'indice di test gira sul provider `fake`, che non effettua chiamate di rete: per quante
+    domande si pongano, la quota resta intatta.
+    """
+    limiti(monkeypatch, per_ip="2")
+    app = run_app()
+
+    for _ in range(4):
+        app.button(key="scenario_0").click().run()
+
+    esito = app.session_state["scenario_result"]["response"]
+    assert not esito.blocked
+    assert esito.rate_limit == "rate_ok"

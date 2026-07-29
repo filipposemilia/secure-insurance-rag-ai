@@ -21,7 +21,7 @@ anagrafica, codice fiscale, IBAN, contatti, dati di sinistro.
 | **LLM01 — Prompt Injection (indiretta)** | Scansione dei chunk recuperati: istruzioni rivolte all'assistente e contenuto nascosto (commenti HTML, testo invisibile) mandano il chunk in quarantena. Il system prompt dichiara inoltre che il contesto è dato, non istruzione, ed è racchiuso in delimitatori espliciti. | `security/guardrails.py::scan_context`, `rag.py::SYSTEM_PROMPT` | Stessa fragilità delle regole. Non copre payload steganografici o in immagini. |
 | **LLM02 — Insecure Output Handling** | La risposta non viene mai eseguita né interpretata: è testo mostrato in UI. Output guard su PII. | `security/guardrails.py::validate_output` | Non c'è sanitizzazione HTML perché non esiste rendering di HTML generato dal modello. |
 | **LLM03 — Training Data Poisoning** | Non applicabile: nessun fine-tuning. È uno dei motivi per cui il RAG è preferibile in questo dominio. | — | Il corpus indicizzato **è** avvelenabile: è esattamente lo scenario coperto dal context guard. |
-| **LLM04 — Model Denial of Service** | Limite di lunghezza sulla query (`MAX_QUERY_LENGTH`), `k` di retrieval fisso, e sui file caricati un tetto di dimensione (`max_upload_mb`) e di numero di chunk (`max_upload_chunks`). | `security/guardrails.py`, `uploads.py` | Nessun rate limiting per utente: va aggiunto a livello di API gateway. |
+| **LLM04 — Model Denial of Service** | Limite di lunghezza sulla query (`MAX_QUERY_LENGTH`), `k` di retrieval fisso, tetto di dimensione e di chunk sui file caricati, e **limiti di frequenza** sull'istanza pubblica: quota oraria per visitatore e tetto giornaliero complessivo. | `security/guardrails.py`, `uploads.py`, `security/ratelimit.py` | I contatori vivono nella memoria del processo: con più repliche servirebbe uno store condiviso. |
 | **LLM06 — Sensitive Information Disclosure** | PII masking **prima** dell'embedding: nel vector store non esiste un dato personale in chiaro. RBAC sul retrieval. Output guard che blocca PII in risposta. Audit senza query in chiaro. | `security/pii.py`, `vectorstore.py`, `security/audit.py` | Il riconoscimento è a regex: nomi non introdotti da un ruolo contrattuale possono sfuggire. Presidio risolve questo punto. |
 | **LLM07 — Insecure Plugin Design** | Non applicabile: nessun tool né azione eseguibile dal modello. Il PoC è read-only per costruzione. | — | Con LangGraph e azioni di liquidazione servirebbe human-in-the-loop obbligatorio. |
 | **LLM08 — Excessive Agency** | Il modello non può compiere azioni: nessuna scrittura, nessuna approvazione, nessuna chiamata a sistemi terzi. Lo scenario 3 della demo mostra un documento che *chiede* di approvare 50.000 EUR e resta senza effetto. | Architettura | — |
@@ -76,7 +76,10 @@ L'hash consente comunque di correlare richieste ripetute e riconoscere campagne 
 Dichiarato esplicitamente, perché un modello di sicurezza sopravvalutato è peggio di uno modesto:
 
 - nessuna autenticazione reale: il ruolo è dichiarato dall'utente, non verificato da un IdP;
-- nessun rate limiting né quota per utente;
+- i limiti di frequenza sono per processo e in memoria: non reggono più repliche, e un riavvio
+  azzera i contatori;
+- l'identità del visitatore è l'indirizzo IP inoltrato dal proxy: sufficiente contro l'abuso
+  occasionale, aggirabile da chi cambia indirizzo;
 - nessuna cifratura at-rest del vector store;
 - nessuna gestione del ciclo di vita dei dati (retention, cancellazione su richiesta GDPR);
 - nessun red teaming sistematico: gli scenari della demo sono sei casi scelti, non una suite.

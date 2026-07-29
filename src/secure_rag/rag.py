@@ -88,6 +88,8 @@ class RAGResponse:
     prompt_sent: str = ""
     latency_ms: int = 0
     provider: str = ""
+    # Regola di frequenza scattata a monte, sull'istanza pubblica: tracciata per l'audit.
+    rate_limit: str = ""
 
     @property
     def security_events(self) -> list[str]:
@@ -155,11 +157,17 @@ class SecureRAGPipeline:
         question: str,
         role: str = "agent",
         scope: SearchScope = "corpus",
+        rate_limit: str = "",
     ) -> RAGResponse:
         """Esegue una richiesta completa applicando tutti i controlli.
 
         `scope` sceglie dove cercare: nel corpus aziendale, nei soli documenti caricati in
         sessione, oppure in entrambi.
+
+        `rate_limit` riporta la regola di frequenza scattata a monte (si veda
+        `security/ratelimit.py`): la pipeline non applica limiti — è l'entry point pubblico a
+        farlo — ma li registra nell'audit, perché una risposta servita in modalità degradata deve
+        restare distinguibile da una normale.
         """
         started = time.perf_counter()
         provider = describe_provider(self._settings)
@@ -178,6 +186,7 @@ class SecureRAGPipeline:
                 input_verdict=input_verdict,
                 latency_ms=_elapsed_ms(started),
                 provider=provider,
+                rate_limit=rate_limit,
             )
             self._write_audit(question, role, response)
             return response
@@ -225,6 +234,7 @@ class SecureRAGPipeline:
                 scope=scope,
                 latency_ms=_elapsed_ms(started),
                 provider=provider,
+                rate_limit=rate_limit,
             )
             self._write_audit(question, role, response, residual_pii)
             return response
@@ -264,6 +274,7 @@ class SecureRAGPipeline:
             prompt_sent=prompt_sent,
             latency_ms=_elapsed_ms(started),
             provider=provider,
+            rate_limit=rate_limit,
         )
         # [7] Audit.
         self._write_audit(question, role, response, residual_pii)
@@ -293,6 +304,7 @@ class SecureRAGPipeline:
                 output_rule=response.output_verdict.rule if response.output_verdict else "",
                 latency_ms=response.latency_ms,
                 provider=response.provider,
+                rate_limit=response.rate_limit,
             )
         )
 

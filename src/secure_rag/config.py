@@ -102,6 +102,13 @@ class Settings(BaseSettings):
     max_upload_mb: float = 5.0
     max_upload_chunks: int = 120
 
+    # --- Limiti di frequenza sull'istanza pubblica (mitigazione LLM04) ---
+    # Servono quando la demo è esposta in rete con una API key a carico di chi la pubblica:
+    # senza, chiunque può consumare token altrui. In locale restano disattivabili.
+    rate_limit_enabled: bool = False
+    rate_limit_per_ip_hour: int = 10
+    rate_limit_global_day: int = 300
+
 
 @lru_cache
 def get_settings() -> Settings:

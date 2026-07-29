@@ -1,0 +1,28 @@
+# Configurazione dell'interfaccia demo.
+# I parametri di rete sono impostati qui e non da riga di comando, così l'avvio in container e
+# quello locale si comportano allo stesso modo.
+
+[theme]
+base = "dark"
+primaryColor = "#2f81f7"
+backgroundColor = "#0d1117"
+secondaryBackgroundColor = "#161b22"
+textColor = "#e6edf3"
+font = "sans serif"
+
+[server]
+headless = true
+address = "0.0.0.0"
+port = 8501
+# Dietro reverse proxy: CORS non serve (stessa origine), XSRF resta attivo.
+enableCORS = false
+enableXsrfProtection = true
+# I file caricati sono limitati anche a monte, in uploads.py (mitigazione LLM04).
+maxUploadSize = 5
+
+[browser]
+gatherUsageStats = false
+
+[client]
+showErrorDetails = false
+toolbarMode = "minimal"

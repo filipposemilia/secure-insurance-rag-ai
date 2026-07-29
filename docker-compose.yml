@@ -1,0 +1,62 @@
+# Istanza pubblica dietro Nginx Proxy Manager.
+#
+# La porta è pubblicata **solo su loopback**: il servizio non è raggiungibile dall'esterno se non
+# passando dal proxy, che è ciò che rende attendibile l'header X-Forwarded-For usato dai limiti di
+# frequenza. Se il container fosse esposto direttamente, chiunque potrebbe falsificare quell'header
+# e aggirare i limiti.
+
+services:
+  secure-rag:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: secure-insurance-rag:latest
+    container_name: secure-rag
+    restart: unless-stopped
+
+    env_file:
+      - .env
+
+    environment:
+      # Il provider e i limiti si impostano qui o in .env; questi sono i valori attesi in
+      # produzione e prevalgono su quelli del file.
+      LLM_PROVIDER: ${LLM_PROVIDER:-openai}
+      RATE_LIMIT_ENABLED: "true"
+      RATE_LIMIT_PER_IP_HOUR: ${RATE_LIMIT_PER_IP_HOUR:-10}
+      RATE_LIMIT_GLOBAL_DAY: ${RATE_LIMIT_GLOBAL_DAY:-300}
+
+    ports:
+      # Solo loopback: il proxy raggiunge il servizio, la rete pubblica no.
+      - "127.0.0.1:8501:8501"
+
+    volumes:
+      # L'indice sopravvive ai riavvii: l'ingestion non si ripete e gli embedding non si ripagano.
+      - chroma-index:/app/chroma_db
+      # L'audit trail è la memoria di sicurezza dell'istanza: non deve morire con il container.
+      - audit-log:/app/logs
+
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8501/_stcore/health', timeout=4).status==200 else 1)"
+      interval: 30s
+      timeout: 5s
+      start_period: 90s
+      retries: 3
+
+    # Contenimento di base: nessun privilegio aggiuntivo, filesystem di sistema in sola lettura
+    # tranne le directory che devono essere scrivibili.
+    security_opt:
+      - no-new-privileges:true
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  chroma-index:
+  audit-log:

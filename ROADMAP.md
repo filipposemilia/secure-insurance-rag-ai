@@ -10,8 +10,10 @@
 | 3 | UI Streamlit a schede: chat con selettore di ambito, upload documenti con referto di sicurezza, pannello scenari e audit | ✅ |
 | 3b | Scelta interattiva del provider all'avvio (OpenAI / Ollama / offline) con rilevamento della disponibilità, indici separati per modello | ✅ |
 | 4 | Documentazione: README, architettura, modello di sicurezza con mapping OWASP, ADR | ✅ |
+| 5 | Istanza pubblica: limiti di frequenza (LLM04) con degradazione al motore offline, immagine Docker, deploy dietro reverse proxy con TLS | ✅ |
 
-Test: 67, tutti offline (`.venv/bin/pytest -q`), inclusi 5 di regressione sull'interfaccia Streamlit.
+Test: 82, tutti offline (`.venv/bin/pytest -q`), inclusi quelli di regressione su interfaccia e
+limiti di frequenza.
 
 ## Future work
 
@@ -26,7 +28,6 @@ aggiungerebbe e perché è stata esclusa.
 | **Classificatore di prompt injection** | Regge le riformulazioni che eludono le regole deterministiche | Richiede un dataset di attacchi e una valutazione seria per non generare falsi positivi | ~1 g |
 | **NeMo Guardrails / Guardrails AI** | Policy dichiarative su argomenti ammessi e formato delle risposte | Sovrapposto a quanto già dimostrato dai guard a regole | ~4 h |
 | **Autenticazione reale (OIDC/JWT)** | Il ruolo verificato da un identity provider invece che dichiarato | Fuori dallo scopo di un PoC senza backend | ~1 g |
-| **Rate limiting e quote per utente** | Mitigazione LLM04 (denial of service e abuso di costi) | Va a livello di API gateway, non di applicazione | ~2 h |
 | **Collection upload per sessione/utente** | In multiutente, i file caricati da uno non devono essere raggiungibili dagli altri con la stessa clearance | Oggi la collection degli upload è unica per istanza: sufficiente per una demo locale | ~2 h |
 | **Antivirus sui file caricati** | Blocca allegati malevoli oltre al payload testuale (macro, PDF con JavaScript) | Richiede un servizio esterno tipo ClamAV | ~3 h |
 
