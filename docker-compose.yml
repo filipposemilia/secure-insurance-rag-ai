@@ -21,6 +21,10 @@ services:
       # Il provider e i limiti si impostano qui o in .env; questi sono i valori attesi in
       # produzione e prevalgono su quelli del file.
       LLM_PROVIDER: ${LLM_PROVIDER:-openai}
+      # Vetrina raggiungibile da chiunque: niente controlli da amministratore in pagina.
+      # Il pulsante di reindicizzazione non è coperto dai limiti di frequenza — quelli valgono
+      # per le domande — e lasciato visibile permetterebbe di far ripagare gli embedding.
+      PUBLIC_MODE: "true"
       RATE_LIMIT_ENABLED: "true"
       RATE_LIMIT_PER_IP_HOUR: ${RATE_LIMIT_PER_IP_HOUR:-10}
       RATE_LIMIT_GLOBAL_DAY: ${RATE_LIMIT_GLOBAL_DAY:-300}

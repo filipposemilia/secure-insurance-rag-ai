@@ -12,7 +12,7 @@
 | 4 | Documentazione: README, architettura, modello di sicurezza con mapping OWASP, ADR | ✅ |
 | 5 | Istanza pubblica: limiti di frequenza (LLM04) con degradazione al motore offline, immagine Docker, deploy dietro reverse proxy con TLS | ✅ |
 
-Test: 91, tutti offline (`.venv/bin/pytest -q`), inclusi quelli di regressione su interfaccia e
+Test: 94, tutti offline (`.venv/bin/pytest -q`), inclusi quelli di regressione su interfaccia e
 limiti di frequenza.
 
 ## Future work

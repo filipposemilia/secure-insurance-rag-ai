@@ -95,16 +95,44 @@ st.markdown(
 )
 
 ROLE_LABELS = {
-    "public": "Cliente (documenti pubblici)",
-    "agent": "Agente di rete (polizze e perizie)",
-    "management": "Direzione Sinistri (tutto, incluse circolari interne)",
+    "public": "Cliente",
+    "agent": "Agente di rete",
+    "management": "Direzione Sinistri",
+}
+
+# Cosa comporta ogni ruolo, detto in termini di documenti invece che di livelli di clearance.
+# È il modo per rendere evidente il controllo degli accessi senza doverlo nominare: si vede che
+# la stessa domanda cambia risposta al cambiare di chi la pone.
+ROLE_ACCESS = {
+    "public": (
+        "Vede le condizioni di polizza pubbliche.",
+        "Non vede polizze aziendali, perizie né documenti interni.",
+    ),
+    "agent": (
+        "Vede le polizze e le perizie di sinistro.",
+        "Non vede le circolari riservate alla direzione.",
+    ),
+    "management": (
+        "Vede tutto, comprese le circolari interne riservate.",
+        "",
+    ),
 }
 
 SCOPE_LABELS = {
-    "corpus": "Corpus aziendale",
-    "uploads": "Solo documenti caricati",
-    "both": "Corpus + documenti caricati",
+    "corpus": "Documenti aziendali",
+    "uploads": "Solo i miei documenti",
+    "both": "Entrambi",
 }
+
+# Domande di partenza, verificate sui documenti realmente indicizzati. L'ultima è deliberatamente
+# riservata alla direzione: posta da un agente riceve una risposta di assenza informazione, ed è il
+# modo più rapido per vedere il controllo degli accessi in funzione.
+DOMANDE_ESEMPIO = [
+    ("Franchigia cyber", "Qual è la franchigia prevista dalla sezione cyber?"),
+    ("Rimborso ransomware", "A quali condizioni è rimborsabile un attacco ransomware?"),
+    ("Postuma decennale", "Cosa prevede l'articolo 14-bis sulla postuma decennale?"),
+    ("Margine di trattativa", "Qual è il margine negoziale nelle transazioni stragiudiziali?"),
+]
 
 
 # ---------------------------------------------------------------------------
@@ -203,64 +231,121 @@ selectable = [status for status in statuses if status[3]]
 
 with st.sidebar:
     st.title("🛡️ Secure Insurance RAG")
-    st.caption("PoC di RAG sicuro su documentazione assicurativa")
+    st.caption("Assistente sulla documentazione di polizza")
 
-    st.subheader("Modello")
-    default_index = next(
-        (index for index, status in enumerate(selectable) if status[0] == base_settings.llm_provider),
-        0,
-    )
-    provider = st.radio(
-        "Provider LLM",
-        options=[status[0] for status in selectable],
-        index=default_index,
-        format_func=lambda name: next(s[1] for s in selectable if s[0] == name),
-        help="Ogni provider ha il proprio indice: cambiando modello va rieseguita l'indicizzazione.",
-    )
-    st.caption(next(status[2] for status in selectable if status[0] == provider))
+    # --- Chi risponde ------------------------------------------------------
+    st.subheader("Come risponde")
 
-    for name, label, _, available, hint in statuses:
-        if not available:
-            st.caption(f"○ {label} — non disponibile · {hint}")
+    if base_settings.public_mode:
+        # Sulla vetrina pubblica il modello non si cambia: il visitatore non ha ragione di
+        # scegliere, e reindicizzare costerebbe embedding a chi ospita l'istanza.
+        provider = base_settings.llm_provider
+        settings = base_settings
+        st.caption(describe_provider(settings))
+    else:
+        default_index = next(
+            (
+                index
+                for index, status in enumerate(selectable)
+                if status[0] == base_settings.llm_provider
+            ),
+            0,
+        )
+        provider = st.radio(
+            "Modello che genera le risposte",
+            options=[status[0] for status in selectable],
+            index=default_index,
+            format_func=lambda name: next(s[1] for s in selectable if s[0] == name),
+            help=(
+                "Ogni modello ha il proprio archivio indicizzato, perché produce rappresentazioni "
+                "numeriche di dimensione diversa: cambiandolo va rifatta l'indicizzazione."
+            ),
+        )
+        st.caption(next(status[2] for status in selectable if status[0] == provider))
 
-    settings = base_settings.with_provider(provider)
+        with st.expander("Altri modelli configurabili"):
+            for _, label, _, available, hint in statuses:
+                if not available:
+                    st.caption(f"○ **{label}** — non attivo · {hint}")
+            st.caption(
+                "Il sistema non è legato a un fornitore: la stessa pipeline gira su OpenAI, "
+                "Azure OpenAI o un modello installato in azienda."
+            )
+
+        settings = base_settings.with_provider(provider)
+
     if settings.is_offline:
-        st.info("Modalità offline: nessuna chiamata di rete, nessun token consumato.", icon="🔌")
+        st.info(
+            "Motore offline: le risposte sono generate in locale, nessun dato lascia questa "
+            "macchina e non viene consumato alcun credito.",
+            icon="🔌",
+        )
 
-    st.subheader("Accesso")
+    # --- Chi fa la domanda -------------------------------------------------
+    st.subheader("Chi sta facendo la domanda")
     role = st.selectbox(
-        "Ruolo del richiedente",
+        "Profilo",
         options=list(CLEARANCE_LEVELS),
         index=1,
         format_func=lambda value: ROLE_LABELS[value],
-        help="Determina quali documenti il retriever può recuperare (RBAC applicato sui vettori).",
+        label_visibility="collapsed",
+        help=(
+            "Il profilo decide **quali documenti vengono cercati**, non quali risposte vengono "
+            "filtrate dopo: i contenuti non autorizzati non entrano mai nel testo inviato al "
+            "modello. In gergo: controllo degli accessi applicato al recupero (RBAC)."
+        ),
     )
+    vede, non_vede = ROLE_ACCESS[role]
+    st.caption(f"✅ {vede}")
+    if non_vede:
+        st.caption(f"🚫 {non_vede}")
 
-    show_prompt = st.toggle("Mostra il prompt inviato all'LLM", value=False)
-
-    st.subheader("Indici")
+    # --- Cosa può consultare -----------------------------------------------
+    st.subheader("Documenti consultabili")
     corpus_chunks = collection_size(settings)
     session_chunks = collection_size(upload_settings(settings))
+
     left, right = st.columns(2)
-    left.metric("Corpus", corpus_chunks)
-    right.metric("Caricati", session_chunks)
+    left.metric(
+        "Aziendali",
+        f"{corpus_chunks} sezioni",
+        help=(
+            "Ogni documento è diviso in sezioni di lunghezza omogenea: la ricerca lavora sulle "
+            "sezioni, così la risposta cita il passaggio esatto invece dell'intero contratto."
+        ),
+    )
+    right.metric(
+        "Caricati da te",
+        f"{session_chunks} sezioni",
+        help="Restano nella tua sessione e non sono raggiungibili dagli altri visitatori.",
+    )
 
-    if st.button("Indicizza corpus aziendale", width="stretch", type="primary"):
-        with st.spinner("Anonimizzazione e indicizzazione in corso…"):
-            st.session_state["ingestion"] = run_ingestion(settings)
-        st.rerun()
+    if not base_settings.public_mode:
+        if st.button("Rigenera l'archivio", width="stretch", type="primary"):
+            with st.spinner("Rimozione dei dati personali e indicizzazione in corso…"):
+                st.session_state["ingestion"] = run_ingestion(settings)
+            st.rerun()
 
-    if report := st.session_state.get("ingestion"):
-        st.success(
-            f"{report['documents']} documenti · {report['chunks']} chunk · "
-            f"{report['entities']} entità PII rimosse"
-        )
-        st.caption("Tipi rimossi: " + ", ".join(report["types"]))
+        if report := st.session_state.get("ingestion"):
+            st.success(
+                f"{report['documents']} documenti · {report['chunks']} sezioni · "
+                f"{report['entities']} dati personali rimossi"
+            )
+            st.caption("Tipi rimossi: " + ", ".join(report["types"]))
+
+    show_prompt = st.toggle(
+        "Mostra il testo inviato al modello",
+        value=False,
+        help=(
+            "Rende visibile il contenuto esatto che raggiunge il modello, con i dati personali "
+            "già sostituiti da segnaposto."
+        ),
+    )
 
     st.divider()
     st.caption(
-        "I documenti in `data/policies/` sono **sintetici**. Nomi, codici fiscali, IBAN e partite "
-        "IVA sono inventati e non riferibili a persone o aziende reali."
+        "⚠️ Tutti i documenti di esempio sono **inventati**: nomi, codici fiscali, IBAN e partite "
+        "IVA non appartengono a persone o aziende reali."
     )
 
 
@@ -286,19 +371,32 @@ def render_response(response: RAGResponse) -> None:
 
     events = response.security_events
     columns = st.columns(4)
-    columns[0].metric("Ruolo", ROLE_LABELS[response.role].split(" (")[0])
-    columns[1].metric("Ambito", SCOPE_LABELS.get(response.scope, response.scope))
-    columns[2].metric("Latenza", f"{response.latency_ms} ms")
-    columns[3].metric("Eventi di sicurezza", len(events))
+    columns[0].metric("Chi ha chiesto", ROLE_LABELS.get(response.role, response.role))
+    columns[1].metric("Dove ha cercato", SCOPE_LABELS.get(response.scope, response.scope))
+    columns[2].metric("Tempo di risposta", f"{response.latency_ms / 1000:.1f} s")
+    columns[3].metric(
+        "Anomalie rilevate",
+        len(events),
+        help="Controlli di sicurezza scattati durante questa richiesta.",
+    )
 
     if events:
         for event in events:
             st.warning(event, icon="⚠️")
     else:
-        st.success("Input pulito · contesto integro · output conforme", icon="✅")
+        st.success(
+            "Nessuna anomalia: la domanda non conteneva tentativi di manipolazione, i documenti "
+            "consultati erano integri e la risposta non contiene dati personali.",
+            icon="✅",
+        )
 
     if response.context_scan and response.context_scan.findings:
-        with st.expander("Dettaglio quarantena"):
+        with st.expander("Perché un documento è stato scartato"):
+            st.caption(
+                "Il documento conteneva testo rivolto all'assistente invece che al lettore — "
+                "tipicamente istruzioni nascoste per alterare la risposta. È stato escluso dal "
+                "materiale inviato al modello."
+            )
             for finding in response.context_scan.findings:
                 st.code(finding, language=None)
 
@@ -307,10 +405,14 @@ def render_response(response: RAGResponse) -> None:
             f"📎 {source}" if source in response.uploaded_sources else f"📄 {source}"
             for source in response.sources
         ]
-        st.caption("**Fonti recuperate:** " + " · ".join(badges))
+        st.caption("**Documenti consultati:** " + " · ".join(badges))
 
     if show_prompt and response.prompt_sent:
-        with st.expander("Prompt inviato all'LLM (anonimizzato)"):
+        with st.expander("Il testo esatto ricevuto dal modello"):
+            st.caption(
+                "I dati personali sono già sostituiti da segnaposto come `[CF_001]`: al modello "
+                "non arriva mai un codice fiscale o un IBAN in chiaro."
+            )
             st.code(response.prompt_sent, language="markdown")
 
 
@@ -390,17 +492,18 @@ st.session_state.setdefault("processed_uploads", set())
 
 # --- Intestazione: cosa sta guardando chi apre il link -----------------------
 _chips = [
-    "PII mascherate prima dell'embedding",
-    "Guardrail su input, contesto e output",
-    "RBAC applicato al retrieval",
-    "Audit trail di ogni interazione",
+    "I dati personali non lasciano il perimetro",
+    "Difesa dalle istruzioni nascoste nei documenti",
+    "Ognuno vede solo ciò a cui è autorizzato",
+    "Ogni interazione è tracciata",
 ]
 st.markdown(
     "<div class='app-hero'>"
     "<h1>🛡️ Secure Insurance RAG</h1>"
-    "<p>Assistente sulla documentazione di polizza con i controlli di sicurezza in evidenza: "
-    "ogni risposta mostra quali documenti sono stati recuperati per il ruolo attivo, quali sono "
-    "stati messi in quarantena e quale prompt è arrivato al modello.</p>"
+    "<p>Fai domande sulla documentazione di polizza e ottieni risposte con la fonte citata. "
+    "Accanto a ogni risposta vedi <b>cosa ha fatto il sistema per proteggerla</b>: quali documenti "
+    "ha potuto consultare il tuo profilo, quali ha scartato perché manomessi, e il testo esatto "
+    "arrivato al modello.</p>"
     "<div class='app-chips'>"
     + "".join(f"<span class='app-chip'>{voce}</span>" for voce in _chips)
     + "</div></div>",
@@ -411,15 +514,27 @@ if settings.rate_limit_enabled:
     _residue_ip, _residue_globali = get_rate_limiter().snapshot(visitor_identity())
     intestazione, quota_visitatore, quota_totale = st.columns([2, 1, 1])
     intestazione.caption(
-        "Documenti **sintetici**: nomi, codici fiscali, IBAN e partite IVA sono inventati. "
-        "Istanza dimostrativa con limiti di frequenza attivi."
+        "Dimostrazione pubblica su documenti **inventati**. Per non lasciare scoperta la spesa "
+        "del modello, il numero di domande è limitato."
     )
-    quota_visitatore.metric("Domande residue", _residue_ip)
-    quota_totale.metric("Quota giornaliera", _residue_globali)
+    quota_visitatore.metric(
+        "Le tue domande",
+        _residue_ip,
+        help="Quante ne puoi ancora fare in quest'ora. Si ricaricano da sole.",
+    )
+    quota_totale.metric(
+        "Disponibili oggi",
+        _residue_globali,
+        help=(
+            "Tetto complessivo giornaliero. Una volta esaurito il servizio non si ferma: "
+            "continua a rispondere con il motore offline."
+        ),
+    )
     if _residue_globali == 0:
         st.info(
-            "Il tetto giornaliero di richieste al modello in rete è esaurito: la demo continua a "
-            "funzionare con il motore deterministico offline.",
+            "Le domande al modello in rete sono esaurite per oggi. Il servizio continua a "
+            "funzionare con il motore offline: le risposte sono più essenziali, ma i controlli di "
+            "sicurezza restano identici.",
             icon="🔌",
         )
 
@@ -432,9 +547,10 @@ tab_chat, tab_docs, tab_security = st.tabs(["💬 Chat", "📎 Documenti", "🛡
 
 with tab_chat:
     st.subheader("Assistente polizze")
-    st.caption(
-        "PII masking prima dell'embedding · guardrails su input, contesto e output · "
-        "RBAC applicato al retrieval · audit trail di ogni interazione"
+    st.markdown(
+        "L'archivio contiene **quattro documenti**: una polizza multirischio impresa (con sezione "
+        "cyber), una RC professionale, una perizia di sinistro e una circolare interna della "
+        "direzione. Le risposte citano sempre il documento da cui provengono."
     )
 
     session_chunks = collection_size(upload_settings(settings))
@@ -444,8 +560,8 @@ with tab_chat:
         format_func=lambda value: SCOPE_LABELS[value],
         horizontal=True,
         help=(
-            "I documenti caricati vivono in una collection separata dal corpus aziendale: "
-            "restano interrogabili a parte e non lo contaminano."
+            "I documenti che carichi restano separati da quelli aziendali: puoi interrogarli da "
+            "soli, e non entrano a far parte dell'archivio comune."
         ),
     )
     if session_chunks == 0 and scope in ("uploads", "both"):
@@ -459,12 +575,26 @@ with tab_chat:
         st.caption("Carica un documento dalla scheda **Documenti** per interrogarlo direttamente.")
 
     if collection_size(settings) == 0:
-        st.warning(
-            f"Corpus non indicizzato per **{describe_provider(settings)}**. Usa "
-            "**Indicizza corpus aziendale** nella barra laterale: ogni provider ha il proprio "
-            "indice, perché i modelli di embedding producono vettori di dimensione diversa.",
-            icon="📄",
-        )
+        if base_settings.public_mode:
+            st.error(
+                "L'archivio non è al momento disponibile. Riprova fra qualche minuto.", icon="⚠️"
+            )
+        else:
+            st.warning(
+                f"Nessun archivio indicizzato per **{describe_provider(settings)}**. Usa "
+                "**Rigenera l'archivio** nella barra laterale: ogni modello ha il proprio indice, "
+                "perché produce rappresentazioni numeriche di dimensione diversa.",
+                icon="📄",
+            )
+
+    # Domande pronte: senza, chi arriva deve inventare una domanda su documenti che non ha letto.
+    if not st.session_state["history"]:
+        st.caption("**Non sai da dove iniziare?** Prova una di queste:")
+        colonne = st.columns(len(DOMANDE_ESEMPIO))
+        for colonna, (etichetta, testo) in zip(colonne, DOMANDE_ESEMPIO):
+            if colonna.button(etichetta, width="stretch", help=testo):
+                st.session_state["domanda_scelta"] = testo
+                st.rerun()
 
     for entry in st.session_state["history"]:
         with st.chat_message("user"):
@@ -474,13 +604,17 @@ with tab_chat:
 
     question = st.chat_input("Fai una domanda sulle polizze…")
 
+    # Una domanda scelta fra quelle pronte segue esattamente lo stesso percorso di una digitata.
+    if scelta := st.session_state.pop("domanda_scelta", None):
+        question = scelta
+
     if question:
         if collection_size(settings) == 0 and scope == "corpus":
-            st.error("Indicizza prima il corpus dalla barra laterale.", icon="📄")
+            st.error("L'archivio aziendale non è disponibile in questo momento.", icon="📄")
         else:
             ask(question, scope)
 
-    if st.session_state["history"] and st.button("Svuota conversazione"):
+    if st.session_state["history"] and st.button("Ricomincia da capo"):
         st.session_state["history"] = []
         st.rerun()
 
@@ -498,30 +632,45 @@ def render_upload_report(report: UploadReport) -> None:
 
     icon = "⚠️" if report.suspicious_chunks else "✅"
     with st.expander(f"{icon} {report.file_name} — {report.summary}", expanded=True):
-        columns = st.columns(4)
-        columns[0].metric("Dimensione", f"{report.size_kb:.0f} KB")
-        columns[1].metric("Chunk", report.chunks)
-        columns[2].metric("PII rimosse", report.pii_count)
-        columns[3].metric("Chunk sospetti", report.suspicious_chunks)
-
-        if report.pii_types:
-            st.caption("**Tipi di dato personale rimossi:** " + ", ".join(report.pii_types))
-
+        # Verdetto in chiaro prima dei numeri: è la sola riga che conta per chi ha appena caricato.
         if report.suspicious_chunks:
             st.error(
-                f"Il documento contiene {report.suspicious_chunks} blocchi con istruzioni rivolte "
-                "all'assistente: possibile **prompt injection indiretta** (OWASP LLM01). I blocchi "
-                "restano tracciati e vengono esclusi dal contesto a ogni interrogazione.",
+                "**Questo documento contiene istruzioni rivolte all'assistente.** "
+                f"{report.suspicious_chunks} parti cercano di alterare le risposte — è il caso in "
+                "cui il testo malevolo non arriva dalla chat ma dal documento stesso. Quelle parti "
+                "vengono escluse a ogni interrogazione, e l'evento resta registrato.",
                 icon="🧨",
             )
             for finding in report.findings:
                 st.code(finding, language=None)
+        else:
+            st.success(
+                "Nessuna istruzione sospetta rilevata: il documento contiene solo testo destinato "
+                "a essere letto.",
+                icon="✅",
+            )
 
-        st.caption(f"Visibile al livello di clearance: **{report.clearance}**")
+        columns = st.columns(4)
+        columns[0].metric("Dimensione", f"{report.size_kb:.0f} KB")
+        columns[1].metric("Sezioni", report.chunks)
+        columns[2].metric(
+            "Dati personali rimossi",
+            report.pii_count,
+            help="Sostituiti da segnaposto prima di qualunque invio al modello.",
+        )
+        columns[3].metric("Parti sospette", report.suspicious_chunks)
+
+        if report.pii_types:
+            st.caption("**Tipi rimossi:** " + ", ".join(report.pii_types))
+
+        st.caption(
+            f"Consultabile da chi ha il profilo **{ROLE_LABELS.get(report.clearance, report.clearance)}** "
+            "o superiore, e solo all'interno di questa sessione."
+        )
 
         left, right = st.columns(2)
         with left:
-            st.caption("Testo originale (resta in memoria applicativa)")
+            st.caption("Come l'hai caricato (resta solo qui)")
             st.text_area(
                 "originale",
                 report.preview_original,
@@ -531,7 +680,7 @@ def render_upload_report(report: UploadReport) -> None:
                 key=f"orig_{report.file_name}_{report.uploaded_at}",
             )
         with right:
-            st.caption("Testo anonimizzato (è questo che viene indicizzato e inviato all'LLM)")
+            st.caption("Come viene archiviato e inviato al modello")
             st.text_area(
                 "anonimizzato",
                 report.preview_masked,
@@ -543,19 +692,21 @@ def render_upload_report(report: UploadReport) -> None:
 
 
 with tab_docs:
-    st.subheader("Documenti caricati in sessione")
+    st.subheader("Carica un tuo documento")
     st.markdown(
-        "Un file caricato è **input non fidato**: riceve lo stesso trattamento del corpus "
-        "aziendale — anonimizzazione PII prima dell'embedding, scansione anti prompt injection, "
-        "clearance ereditata dal ruolo attivo — più due controlli di ingresso: dimensione massima "
-        f"{settings.max_upload_mb:.0f} MB e {settings.max_upload_chunks} chunk (mitigazione LLM04).\n\n"
-        "I documenti restano **isolati nella tua sessione**: nessun altro visitatore può "
-        "raggiungerli. Togliendo un file dall'elenco i suoi chunk vengono eliminati dall'indice, "
-        "e tutto viene comunque rimosso alla chiusura della sessione."
+        "Puoi caricare una polizza, una perizia o un preventivo e farci domande sopra. "
+        "Prima ancora che tu possa chiedere qualcosa, il documento viene **ripulito dai dati "
+        "personali** ed **esaminato**: se contiene istruzioni nascoste rivolte all'assistente, te "
+        "lo diciamo subito."
+    )
+    st.caption(
+        f"Formati: PDF, Markdown, testo · massimo {settings.max_upload_mb:.0f} MB · "
+        "il documento resta **isolato nella tua sessione**, non è raggiungibile dagli altri "
+        "visitatori e sparisce quando chiudi. Togliendolo dall'elenco viene cancellato subito."
     )
 
     uploaded_files = st.file_uploader(
-        f"Formati ammessi: {', '.join(SUPPORTED_SUFFIXES)}",
+        "Trascina qui un file, oppure scegline uno",
         type=[suffix.lstrip(".") for suffix in SUPPORTED_SUFFIXES],
         accept_multiple_files=True,
     )
@@ -623,7 +774,7 @@ with tab_docs:
         left, right = st.columns([3, 1])
         with left:
             domanda = st.text_input(
-                "Domanda mirata sui documenti caricati",
+                "Chiedi qualcosa su questi documenti",
                 placeholder="Es. Qual è l'importo dell'indennizzo proposto?",
             )
         with right:
@@ -639,16 +790,15 @@ with tab_docs:
             st.markdown("**Esito**")
             render_response(response)
 
-        if st.button("Rimuovi tutti i documenti caricati"):
+        if st.button("Elimina tutti i miei documenti"):
             reset_collection(upload_settings(settings))
             st.session_state["upload_reports"] = []
             st.session_state["processed_uploads"] = set()
             st.rerun()
     else:
         st.info(
-            "Nessun documento caricato. Prova con `data/policies/perizia_sinistro_compromessa.md`: "
-            "contiene una prompt injection indiretta nascosta in un commento HTML e il referto la "
-            "segnala prima ancora della prima domanda.",
+            "Non hai ancora caricato nulla. Va bene qualsiasi polizza o perizia in PDF: vedrai "
+            "quanti dati personali vengono rimossi e se il documento contiene istruzioni nascoste.",
             icon="🧪",
         )
 
@@ -658,13 +808,18 @@ with tab_docs:
 # ---------------------------------------------------------------------------
 
 with tab_security:
-    st.subheader("Scenari di attacco")
-    st.caption("Ogni scenario è mappato su un rischio della OWASP Top 10 for LLM Applications.")
-
+    st.subheader("Mettilo alla prova")
+    st.markdown(
+        "Sei tentativi di far sbagliare il sistema, eseguibili con un clic: chiedergli di "
+        "ignorare le regole, farsi dare dati personali, leggere documenti riservati. "
+        "**Ogni scenario si esegue con il profilo che gli è proprio**, indipendentemente da quello "
+        "scelto in barra laterale — è ciò che rende confrontabili il quinto e il sesto, che pongono "
+        "la stessa domanda con autorizzazioni diverse."
+    )
     st.caption(
-        "Ogni scenario gira con il **ruolo che gli è proprio**, indipendentemente da quello "
-        "selezionato in barra laterale: è ciò che rende confrontabili il 5 e il 6, che pongono la "
-        "stessa domanda con clearance diverse."
+        "Il riferimento accanto a ciascuno (LLM01, LLM06…) è la classificazione OWASP Top 10 for "
+        "LLM Applications, lo standard di settore per i rischi dei sistemi basati su modelli "
+        "linguistici."
     )
 
     columns = st.columns(3)
@@ -672,9 +827,10 @@ with tab_security:
         with columns[index % 3]:
             with st.container(border=True):
                 st.markdown(f"**{scenario.name}**")
-                st.caption(f"OWASP: {scenario.owasp}")
-                st.caption(f"Ruolo: `{scenario.role}`")
-                st.caption(scenario.expected)
+                st.caption(f"Profilo usato: **{ROLE_LABELS.get(scenario.role, scenario.role)}**")
+                if scenario.owasp != "—":
+                    st.caption(f"Rischio: {scenario.owasp}")
+                st.caption(f"Esito atteso: {scenario.expected}")
                 if st.button("Esegui", key=f"scenario_{index}", width="stretch"):
                     st.session_state["scenario_result"] = {
                         "name": scenario.name,
@@ -693,14 +849,55 @@ with tab_security:
         render_response(result["response"])
 
     st.divider()
-    st.subheader("Audit trail")
+    st.subheader("Registro delle interazioni")
+    st.markdown(
+        "Ogni richiesta lascia una riga verificabile a posteriori: **chi** ha chiesto, **quali** "
+        "documenti sono stati consultati, **quali controlli** sono scattati. In un settore "
+        "regolamentato è ciò che permette a un revisore di ricostruire una risposta a distanza di "
+        "mesi."
+    )
+
     records = get_pipeline(provider).audit.tail(15)
     if records:
-        st.dataframe(records, width="stretch")
+        # Intestazioni leggibili; i nomi originali dei campi restano sotto, perché è il formato
+        # che verrebbe spedito a un SIEM e va riconosciuto da chi lo integra.
+        etichette = {
+            "timestamp": "Quando",
+            "role": "Profilo",
+            "query_hash": "Impronta domanda",
+            "query_length": "Lunghezza",
+            "input_verdict": "Controllo domanda",
+            "input_rule": "Regola scattata",
+            "scope": "Ambito",
+            "context_sources": "Documenti consultati",
+            "uploaded_sources": "Di cui caricati",
+            "quarantined_sources": "Documenti scartati",
+            "pii_masked_in_context": "Dati personali rimossi",
+            "output_verdict": "Controllo risposta",
+            "output_rule": "Regola risposta",
+            "latency_ms": "Durata (ms)",
+            "provider": "Modello",
+            "rate_limit": "Limite di frequenza",
+        }
+        leggibili = [
+            {etichette.get(chiave, chiave): valore for chiave, valore in record.items()}
+            for record in records
+        ]
+        st.dataframe(leggibili, width="stretch")
         st.caption(
-            "La domanda in chiaro non viene mai registrata: nel log resta solo un hash, "
-            "insieme a ruolo, ambito di ricerca, fonti consultate, documenti in quarantena e "
-            "verdetti dei guard."
+            "**La domanda in chiaro non viene mai registrata**: al suo posto resta un'impronta "
+            "irreversibile, che consente di riconoscere richieste ripetute senza conservare il "
+            "testo. Un registro che archiviasse le domande diventerebbe esso stesso un deposito di "
+            "dati personali."
         )
+        with st.expander("Nomi originali dei campi (formato di esportazione)"):
+            st.caption(
+                "Il registro è scritto in JSONL, un oggetto per riga, pronto per essere inoltrato "
+                "a un sistema di correlazione eventi (SIEM). Corrispondenze:"
+            )
+            st.code(
+                "\n".join(f"{campo:<24} → {nome}" for campo, nome in etichette.items()),
+                language=None,
+            )
     else:
-        st.caption("Nessuna interazione registrata.")
+        st.caption("Nessuna interazione registrata finora.")

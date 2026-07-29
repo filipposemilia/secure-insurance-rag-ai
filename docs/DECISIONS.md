@@ -255,3 +255,33 @@ questa la proprietà che conta, perché un utente giudica cosa il sistema "sa" d
 di sessione entra in un nome di collection, quindi viene ripulito dei caratteri non alfanumerici.
 Resta un limite: l'isolamento vale per sessione del browser, non per identità verificata — chi
 riapre il link ottiene una sessione nuova e vuota, che per una demo è il comportamento desiderabile.
+
+---
+
+## ADR-016 — Due livelli di lettura, e controlli da amministratore fuori dalla vetrina
+
+**Contesto.** L'interfaccia era scritta per chi già sa cos'è un sistema RAG: «Provider LLM»,
+«Indici · Corpus 14», «Ruolo del richiedente», istruzioni per installare Ollama, e una chat vuota
+che non suggerisce nulla — senza sapere quali documenti esistano, un visitatore non può nemmeno
+formulare una domanda. Ma il progetto resta una prova tecnica su AI e sicurezza: cancellare il
+vocabolario specialistico significherebbe rinunciare a mostrare padronanza.
+
+**Decisione.** Il gergo non viene rimosso, viene **spostato di un livello**. In superficie
+linguaggio comune («Chi sta facendo la domanda», «Documenti consultabili», «Anomalie rilevate»); il
+termine esatto — RBAC, anonimizzazione prima dell'indicizzazione, OWASP LLM01 — resta nei tooltip,
+negli expander e nella scheda Sicurezza, che è dichiaratamente la parte tecnica.
+
+Il controllo degli accessi è il caso esemplare: invece di spiegare cos'è l'RBAC, la barra laterale
+dichiara **cosa quel profilo vede e cosa non vede**, e cambiando profilo la stessa domanda cambia
+risposta. Il meccanismo si capisce osservandolo, non leggendone la definizione.
+
+Separatamente, `public_mode` distingue la vetrina dall'uso locale. In pubblico spariscono la scelta
+del modello e il pulsante di reindicizzazione: **quest'ultimo non è coperto dai limiti di frequenza,
+che valgono per le domande**, e lasciato in pagina permetterebbe a chiunque di far ripagare gli
+embedding a chi ospita l'istanza. Era un problema di costo, non di ordine visivo.
+
+**Conseguenze.** Un'unica base di codice serve due pubblici. Il rischio è la deriva: ogni testo
+nuovo va scritto pensando a chi non conosce il dominio, con il termine tecnico come
+approfondimento e non come etichetta. Le quattro domande pronte in chat sono verificate sui
+documenti realmente indicizzati — una di esse è riservata alla direzione, così un clic mostra il
+controllo degli accessi in azione invece di descriverlo.

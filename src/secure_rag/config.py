@@ -119,6 +119,12 @@ class Settings(BaseSettings):
     max_upload_mb: float = 5.0
     max_upload_chunks: int = 120
 
+    # --- Istanza pubblica ---
+    # Distingue la vetrina raggiungibile da chiunque dall'uso locale. In pubblico spariscono i
+    # controlli da amministratore: cambio del provider e reindicizzazione, che costa embedding e
+    # non è protetta dai limiti di frequenza (quelli valgono per le domande).
+    public_mode: bool = False
+
     # --- Limiti di frequenza sull'istanza pubblica (mitigazione LLM04) ---
     # Servono quando la demo è esposta in rete con una API key a carico di chi la pubblica:
     # senza, chiunque può consumare token altrui. In locale restano disattivabili.

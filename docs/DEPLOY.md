@@ -41,10 +41,17 @@ offline senza mai interrogare il modello.
 ```ini
 LLM_PROVIDER=openai
 OPENAI_API_KEY=sk-...              # non finisce mai nell'immagine: passa da env_file a runtime
+PUBLIC_MODE=true                   # nasconde i controlli da amministratore
 RATE_LIMIT_ENABLED=true
 RATE_LIMIT_PER_IP_HOUR=10
 RATE_LIMIT_GLOBAL_DAY=300
 ```
+
+`PUBLIC_MODE=true` rimuove dall'interfaccia la scelta del modello e il pulsante di
+reindicizzazione. Non è solo una questione di ordine: **la reindicizzazione costa embedding e non è
+coperta dai limiti di frequenza**, che valgono per le domande. Lasciata in pagina, chiunque
+potrebbe premerla ripetutamente a spese di chi ospita l'istanza. In locale va tenuta a `false`, così
+la demo dal vivo può cambiare modello e ricostruire l'archivio.
 
 `RATE_LIMIT_GLOBAL_DAY` è il tetto di spesa: superato, l'istanza **continua a rispondere** usando il
 motore deterministico offline invece di rifiutare le richieste. Con `gpt-4o-mini` e un contesto di 4

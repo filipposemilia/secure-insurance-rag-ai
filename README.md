@@ -78,7 +78,7 @@ dimensione diversa: 1536 per `text-embedding-3-small`, 256 per quello determinis
 provider nuovo va eseguito `ingest` una volta per quel provider; gli indici già costruiti restano
 validi e si può alternare senza re-indicizzare.
 
-Demo guidata: `bash scripts/demo.sh openai` (o `fake`). Test: `.venv/bin/pytest -q` — 91 test, tutti
+Demo guidata: `bash scripts/demo.sh openai` (o `fake`). Test: `.venv/bin/pytest -q` — 94 test, tutti
 offline, nessuna API key richiesta.
 
 ## Architettura
@@ -143,7 +143,7 @@ src/secure_rag/
 
 app/streamlit_app.py       UI demo a schede: chat, upload documenti, sicurezza
 data/policies/             4 documenti sintetici, uno deliberatamente compromesso
-tests/                     91 test, nessuna chiamata di rete
+tests/                     94 test, nessuna chiamata di rete
 ```
 
 ## Deploy

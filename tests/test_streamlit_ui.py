@@ -119,6 +119,52 @@ def test_lo_scenario_di_injection_diretta_resta_bloccato_dalla_ui(indexed_app):
 # ------------------------------------------------------- limiti di frequenza
 
 
+# ------------------------------------------------------- istanza pubblica
+
+
+def modalita_pubblica(monkeypatch, attiva: bool) -> None:
+    import streamlit as st
+
+    monkeypatch.setenv("PUBLIC_MODE", "true" if attiva else "false")
+    get_settings.cache_clear()
+    st.cache_resource.clear()
+
+
+def test_in_pubblico_niente_controlli_da_amministratore(indexed_app, monkeypatch):
+    """Il pulsante di indicizzazione non è coperto dai limiti di frequenza, che valgono per le
+    domande: lasciato in pagina, chiunque potrebbe far ripagare gli embedding a ripetizione."""
+    modalita_pubblica(monkeypatch, attiva=True)
+    app = run_app()
+
+    etichette = [pulsante.label for pulsante in app.button]
+    assert not any("Rigenera" in etichetta for etichetta in etichette)
+    # Nessun selettore del modello: in pubblico il provider non si cambia.
+    assert not any(radio.label == "Modello che genera le risposte" for radio in app.radio)
+
+
+def test_in_locale_i_controlli_restano(indexed_app, monkeypatch):
+    """La demo dal vivo deve poter cambiare modello e reindicizzare."""
+    modalita_pubblica(monkeypatch, attiva=False)
+    app = run_app()
+
+    etichette = [pulsante.label for pulsante in app.button]
+    assert any("Rigenera" in etichetta for etichetta in etichette)
+
+
+def test_le_domande_pronte_producono_una_risposta(indexed_app, monkeypatch):
+    """Chi apre il link deve poter provare senza inventare una domanda sui documenti."""
+    modalita_pubblica(monkeypatch, attiva=True)
+    app = run_app()
+
+    pronte = [b for b in app.button if b.label in {"Franchigia cyber", "Rimborso ransomware"}]
+    assert pronte, "le domande di esempio devono essere presenti a conversazione vuota"
+
+    pronte[0].click().run()
+
+    assert len(app.session_state["history"]) == 1
+    assert app.session_state["history"][0]["response"].answer
+
+
 def limiti(monkeypatch, per_ip: str) -> None:
     """Attiva i limiti di frequenza sull'app sotto test."""
     import streamlit as st
@@ -164,12 +210,11 @@ def test_i_tre_ambiti_di_ricerca_sono_sempre_disponibili(indexed_app):
     """
     app = run_app()
 
-    # `options` restituisce le etichette già passate da `format_func`, non i valori interni.
-    assert set(app.radio[0].options) == {
-        "Corpus aziendale",
-        "Solo documenti caricati",
-        "Corpus + documenti caricati",
-    }
+    # Si verificano numero e selezionabilità, non le etichette: quelle sono una scelta di
+    # presentazione che può cambiare senza che il comportamento cambi.
+    ambiti = next(radio for radio in app.radio if radio.label == "Dove cercare")
+    assert len(ambiti.options) == 3
+    assert all(etichetta.strip() for etichetta in ambiti.options)
 
 
 def test_ambito_senza_documenti_caricati_avvisa_invece_di_rispondere_a_vuoto(indexed_app):
