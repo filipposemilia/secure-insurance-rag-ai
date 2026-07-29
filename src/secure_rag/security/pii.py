@@ -4,6 +4,16 @@ Questo è il primo layer di sicurezza della pipeline: il testo viene ripulito da
 **prima** di essere trasformato in embedding e **prima** di finire in un prompt inviato all'LLM.
 Il vector database e il provider LLM non vedono mai un codice fiscale o un IBAN in chiaro.
 
+Le categorie coperte seguono l'elenco di un parere legale sul GDPR per il settore assicurativo:
+identificativi diretti (nome, codice fiscale, recapiti, documenti d'identità, indirizzo) e
+identificativi indiretti (numero di polizza, di sinistro e di pratica, IBAN, targa, telaio). Questi
+ultimi contano quanto il nome: anche togliendo il nominativo, un numero di polizza riporta a una
+persona sola.
+
+**Restano scoperti**, e vanno dichiarati invece che sottintesi: i dati sanitari (Art. 9) e giudiziari
+(Art. 10) — diagnosi, percentuali di invalidità, verbali — che **non hanno una forma riconoscibile**
+e nessuna regex potrà mai individuare. Servono NER o un classificatore addestrato.
+
 Scelta implementativa: regex deterministiche + dizionario di entità note. In produzione questo
 modulo va sostituito da Microsoft Presidio (NER + riconoscitori italiani), mantenendo la stessa
 firma `PIIMasker.mask(text) -> MaskingResult`: il resto della pipeline non cambia.
@@ -58,13 +68,32 @@ _PATTERNS: list[tuple[str, Pattern[str]]] = [
     ("IBAN", re.compile(r"\b[A-Z]{2}\d{2}[A-Z0-9]{11,30}\b")),
     # Codice fiscale persona fisica
     ("CF", re.compile(r"\b[A-Z]{6}\d{2}[A-Z]\d{2}[A-Z]\d{3}[A-Z]\b")),
+    # Numero di telaio (VIN): 17 caratteri, senza I, O e Q per non confonderle con 1 e 0.
+    # Prima dei pattern più corti, che altrimenti ne mangerebbero un frammento.
+    ("TELAIO", re.compile(r"\b[A-HJ-NPR-Z0-9]{17}\b")),
+    # Numero di polizza, sinistro o pratica. Identificano un contratto riferibile a una persona:
+    # per il GDPR sono identificativi indiretti quanto il nome.
+    ("PRATICA", re.compile(r"\b[A-Z]{2,4}-\d{4}-\d{4,8}\b")),
     # Carta di credito (gruppi di 4 cifre, separatore opzionale)
     ("CARTA", re.compile(r"\b(?:\d{4}[ -]?){3}\d{4}\b")),
     ("EMAIL", re.compile(r"\b[\w.+-]+@[\w-]+\.[\w.]{2,}\b")),
     # Telefono italiano, con o senza prefisso internazionale
     ("TELEFONO", re.compile(r"(?:\+39[ .-]?)?\b3\d{2}[ .-]?\d{6,7}\b")),
+    # Targa automobilistica, formato in uso dal 1994
+    ("TARGA", re.compile(r"\b[A-Z]{2}\d{3}[A-Z]{2}\b")),
+    # Patente, carta d'identità, passaporto: condividono la forma due lettere + sette cifre
+    ("DOCUMENTO", re.compile(r"\b[A-Z]{2}\d{7}[A-Z]?\b")),
     # Partita IVA / codice fiscale societario: 11 cifre isolate
     ("PIVA", re.compile(r"\b\d{11}\b")),
+    # Indirizzo di residenza o dell'immobile assicurato: localizza una persona con la stessa
+    # precisione di un recapito telefonico.
+    (
+        "INDIRIZZO",
+        re.compile(
+            r"\b(?:Via|Viale|Piazza|Piazzale|Corso|Largo|Vicolo|Strada)\s+"
+            r"[A-Z][\w']+(?:\s+(?:degli|della|dei|del|di|de)?\s*[A-Z][\w']+)*,?\s+\d+[A-Za-z]?\b"
+        ),
+    ),
     # Data di nascita in formato gg/mm/aaaa, solo se preceduta da un indicatore
     ("DATA_NASCITA", re.compile(r"(?<=nato il )\d{2}/\d{2}/\d{4}|(?<=nata il )\d{2}/\d{2}/\d{4}")),
     # Nome proprio introdotto da un ruolo contrattuale (euristica; in produzione: NER)
@@ -83,6 +112,9 @@ _PATTERNS: list[tuple[str, Pattern[str]]] = [
 
 # Sequenze già mascherate: non devono essere ri-processate dai pattern successivi.
 _PLACEHOLDER_RE = re.compile(r"\[[A-Z_]+_\d{3}\]")
+
+# Scompone un segnaposto nei suoi due elementi, per riprendere i contatori da un vault caricato.
+_PLACEHOLDER_PARTS = re.compile(r"\[([A-Z_]+)_(\d{3})\]")
 
 
 class PIIMasker:
@@ -146,6 +178,25 @@ class PIIMasker:
     def vault(self) -> dict[str, str]:
         """Mappa segnaposto → valore reale. Non deve mai essere serializzata nel vector store."""
         return dict(self._vault)
+
+    def load_vault(self, mapping: dict[str, str]) -> None:
+        """Riprende una mappa prodotta da un'esecuzione precedente.
+
+        Serve perché ingestion e interrogazione sono processi distinti: senza, lo stesso IBAN
+        riceverebbe segnaposto diversi nei due momenti, e il testo indicizzato non corrisponderebbe
+        più a quello che l'applicazione sa ricostruire.
+
+        I contatori ripartono dal massimo già assegnato per ciascun tipo, altrimenti un segnaposto
+        nuovo collirebbe con uno esistente sovrascrivendone il significato.
+        """
+        for placeholder, original in mapping.items():
+            self._vault[placeholder] = original
+            self._reverse[original] = placeholder
+
+            match = _PLACEHOLDER_PARTS.fullmatch(placeholder)
+            if match:
+                entity_type, numero = match.group(1), int(match.group(2))
+                self._counters[entity_type] = max(self._counters.get(entity_type, 0), numero)
 
     # -------------------------------------------------------------- interni
 

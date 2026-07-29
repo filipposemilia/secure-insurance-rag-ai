@@ -119,6 +119,15 @@ class Settings(BaseSettings):
     max_upload_mb: float = 5.0
     max_upload_chunks: int = 120
 
+    # --- Vault dei dati personali (pseudonimizzazione reversibile) ---
+    # Senza chiave il vault non viene scritto e il ripristino resta spento: il comportamento
+    # predefinito è l'anonimizzazione irreversibile, cioè il più prudente. La chiave si genera con
+    # `python -c "from secure_rag.security.vault import genera_chiave; print(genera_chiave())"`.
+    pii_vault_key: str = ""
+    pii_vault_path: Path = PROJECT_ROOT / "vault" / "pii_vault.enc"
+    # Ruoli autorizzati a vedere i dati reali al posto dei segnaposto.
+    unmask_roles: str = "management"
+
     # --- Istanza pubblica ---
     # Distingue la vetrina raggiungibile da chiunque dall'uso locale. In pubblico spariscono i
     # controlli da amministratore: cambio del provider e reindicizzazione, che costa embedding e

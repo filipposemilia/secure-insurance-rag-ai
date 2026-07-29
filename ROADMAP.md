@@ -12,7 +12,7 @@
 | 4 | Documentazione: README, architettura, modello di sicurezza con mapping OWASP, ADR | ✅ |
 | 5 | Istanza pubblica: limiti di frequenza (LLM04) con degradazione al motore offline, immagine Docker, deploy dietro reverse proxy con TLS | ✅ |
 
-Test: 94, tutti offline (`.venv/bin/pytest -q`), inclusi quelli di regressione su interfaccia e
+Test: 107, tutti offline (`.venv/bin/pytest -q`), inclusi quelli di regressione su interfaccia e
 limiti di frequenza.
 
 ## Future work
@@ -24,7 +24,8 @@ aggiungerebbe e perché è stata esclusa.
 
 | Voce | Cosa aggiunge | Perché non ora | Sforzo |
 | :--- | :--- | :--- | :--- |
-| **Microsoft Presidio** al posto delle regex | NER sui nomi in contesto libero, riconoscitori italiani, punteggi di confidenza | Il PoC deve restare installabile in un minuto; Presidio porta spaCy e modelli linguistici | ~4 h |
+| **Microsoft Presidio** affiancato alle regex | NER sui nomi in testo libero e riconoscitori italiani già pronti (codice fiscale, patente, carta d'identità), con punteggi di confidenza. Da affiancare, non sostituire: le regex attuali sono deterministiche e testate | Porta spaCy e un modello linguistico: con `it_core_news_lg` l'immagine cresce di ~540 MB. Va importato in modo opzionale, con fallback alle regex, perché la demo offline resti installabile in un minuto | ~4 h |
+| **Riconoscimento di dati sanitari e giudiziari** (Art. 9 e 10 GDPR) | Diagnosi, percentuali di invalidità, verbali: **le uniche categorie dell'elenco legale che restano scoperte**, perché non hanno una forma riconoscibile da una regex | Richiede un classificatore addestrato o un NER medico-legale italiano, più un dataset annotato per misurarne i falsi negativi | ~2 g |
 | **Classificatore di prompt injection** | Regge le riformulazioni che eludono le regole deterministiche | Richiede un dataset di attacchi e una valutazione seria per non generare falsi positivi | ~1 g |
 | **NeMo Guardrails / Guardrails AI** | Policy dichiarative su argomenti ammessi e formato delle risposte | Sovrapposto a quanto già dimostrato dai guard a regole | ~4 h |
 | **Autenticazione reale (OIDC/JWT)** | Il ruolo verificato da un identity provider invece che dichiarato | Fuori dallo scopo di un PoC senza backend | ~1 g |

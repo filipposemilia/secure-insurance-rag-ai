@@ -285,3 +285,55 @@ nuovo va scritto pensando a chi non conosce il dominio, con il termine tecnico c
 approfondimento e non come etichetta. Le quattro domande pronte in chat sono verificate sui
 documenti realmente indicizzati — una di esse è riservata alla direzione, così un clic mostra il
 controllo degli accessi in azione invece di descriverlo.
+
+---
+
+## ADR-017 — L'anonimizzazione non passa da un LLM
+
+**Contesto.** La tentazione, potendo chiamare un modello, è chiedergli «rimuovi i dati personali da
+questo documento». È l'approccio che un parere legale sul GDPR per il settore assicurativo scarta
+esplicitamente, e le ragioni reggono da sole.
+
+**Decisione.** Il masking resta deterministico e locale (`security/pii.py`), eseguito **prima** di
+qualunque chiamata di rete. L'evoluzione prevista è Presidio con un modello NER italiano — sempre in
+locale — non un LLM.
+
+**Motivo.** Tre problemi, in ordine di gravità:
+1. **Sarebbe una violazione in sé**: si invierebbero i dati personali in chiaro al fornitore esterno
+   proprio per chiedergli di rimuoverli. Il trattamento avviene nel momento dell'invio.
+2. **Un generatore di testo può saltare un nome o riscrivere una clausola.** Un mancato
+   riconoscimento è una fuga di dati; una riscrittura è un contratto alterato. Le regex sbagliano in
+   modo prevedibile e verificabile con un test.
+3. Costo e latenza per un compito che una regex risolve in microsecondi.
+
+**Conseguenze.** Il limite è dichiarato invece che aggirato: dati sanitari e giudiziari restano
+scoperti perché non hanno una forma riconoscibile, ed è scritto in `docs/SECURITY.md`. Il masking
+copre ora anche gli identificativi indiretti dell'elenco legale — polizza, sinistro, targa, telaio,
+documenti d'identità, indirizzo — compreso il numero di polizza nei **metadati**, che viveva fuori
+dal testo dei chunk e finiva nel prompt in chiaro attraverso il blocco `[fonte: …]`.
+
+---
+
+## ADR-018 — Vault cifrato opzionale, spento per impostazione predefinita
+
+**Contesto.** I segnaposto erano stabili ma la mappa inversa moriva con il processo: `ingest` gira da
+riga di comando, l'interfaccia altrove. Il progetto si presentava come pseudonimizzazione mentre in
+pratica faceva anonimizzazione irreversibile, e `unmask()` esisteva senza essere mai chiamato.
+
+**Decisione.** `security/vault.py` persiste la mappa cifrata con Fernet, chiave da `PII_VAULT_KEY`,
+file con permessi `600`. Il ripristino avviene in `rag.py` **dopo l'output guard** e solo per i ruoli
+in `UNMASK_ROLES`.
+
+L'ordine non è un dettaglio: il guard verifica che il modello non abbia rigenerato per conto suo dati
+personali che non gli erano stati forniti. Ripristinare prima lo farebbe scattare sui segnaposto
+sostituiti da noi, bloccando risposte legittime e — peggio — mascherando il caso che il controllo
+esiste per intercettare.
+
+**Senza chiave non viene scritto nulla** e il ripristino resta disattivato. Il default è il
+comportamento irreversibile, ed è quello attivo sull'istanza pubblica, dove non esiste un operatore
+autorizzato da distinguere.
+
+**Conseguenze.** Il ciclo descritto dal parere legale è chiuso, ma introduce ciò che prima non
+c'era: **un archivio di dati personali da proteggere**. È un aumento di capacità e di rischio
+insieme, e per questo è opt-in. `cryptography` è una dipendenza opzionale (`.[vault]`): se manca, il
+sistema si comporta come se la chiave fosse assente invece di scrivere in chiaro.

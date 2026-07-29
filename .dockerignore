@@ -19,6 +19,10 @@ chroma_db/
 logs/
 *.jsonl
 
+# Vault dei dati personali: non deve mai finire in un livello dell'immagine
+vault/
+*.enc
+
 # Cronologia e strumenti di sviluppo: l'immagine contiene solo ciò che serve a eseguire.
 # Il Dockerfile copia comunque percorsi espliciti, quindi questo elenco riduce il contesto di
 # build senza essere l'unica difesa.

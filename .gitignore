@@ -15,6 +15,10 @@ chroma_db/
 logs/
 *.jsonl
 
+# Vault dei dati personali: cifrato, ma resta un archivio di dati reali. Mai versionato.
+vault/
+*.enc
+
 # OS / editor
 .DS_Store
 .idea/

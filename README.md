@@ -13,7 +13,7 @@ audit trail ricostruibile.
 
 | | Capacità | Dove guardarla |
 | :--- | :--- | :--- |
-| 🔒 | **PII masking prima dell'embedding**: nel vector store non esiste un CF o un IBAN in chiaro. Segnaposto stabili tra documenti (`[IBAN_001]`). | `secure-rag ingest` |
+| 🔒 | **PII masking prima dell'embedding**: nel vector store non esiste un CF o un IBAN in chiaro. Copre anche gli identificativi *indiretti* dell'elenco GDPR — numero di polizza, sinistro, targa, telaio — con segnaposto stabili fra documenti (`[IBAN_001]`). | `secure-rag ingest` |
 | 🚫 | **Prompt injection diretta** bloccata prima della chiamata al modello: 0 ms, 0 token. | scenario 2 |
 | 🧨 | **Prompt injection indiretta** nascosta in un commento HTML dentro una perizia: il chunk finisce in quarantena e l'evento viene segnalato. | scenario 3 |
 | 👤 | **RBAC sui vettori**: la stessa domanda dà risultati diversi per un agente di rete e per la direzione. | scenari 5 e 6 |
@@ -78,7 +78,7 @@ dimensione diversa: 1536 per `text-embedding-3-small`, 256 per quello determinis
 provider nuovo va eseguito `ingest` una volta per quel provider; gli indici già costruiti restano
 validi e si può alternare senza re-indicizzare.
 
-Demo guidata: `bash scripts/demo.sh openai` (o `fake`). Test: `.venv/bin/pytest -q` — 94 test, tutti
+Demo guidata: `bash scripts/demo.sh openai` (o `fake`). Test: `.venv/bin/pytest -q` — 107 test, tutti
 offline, nessuna API key richiesta.
 
 ## Architettura
@@ -136,14 +136,15 @@ src/secure_rag/
 ├── rag.py                 pipeline con i sette passi di controllo
 ├── cli.py                 ingest · ask · attack-demo · audit
 └── security/
-    ├── pii.py             masking con segnaposto stabili + vault
+    ├── pii.py             masking con segnaposto stabili, categorie dell'elenco GDPR
+    ├── vault.py           mappa segnaposto → valore reale, cifrata e opzionale
     ├── guardrails.py      input guard · context guard · output guard
     ├── ratelimit.py       quota per visitatore e tetto di spesa (istanza pubblica)
     └── audit.py           audit trail JSONL
 
 app/streamlit_app.py       UI demo a schede: chat, upload documenti, sicurezza
 data/policies/             4 documenti sintetici, uno deliberatamente compromesso
-tests/                     94 test, nessuna chiamata di rete
+tests/                     107 test, nessuna chiamata di rete
 ```
 
 ## Deploy

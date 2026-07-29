@@ -22,11 +22,47 @@ anagrafica, codice fiscale, IBAN, contatti, dati di sinistro.
 | **LLM02 — Insecure Output Handling** | La risposta non viene mai eseguita né interpretata: è testo mostrato in UI. Output guard su PII. | `security/guardrails.py::validate_output` | Non c'è sanitizzazione HTML perché non esiste rendering di HTML generato dal modello. |
 | **LLM03 — Training Data Poisoning** | Non applicabile: nessun fine-tuning. È uno dei motivi per cui il RAG è preferibile in questo dominio. | — | Il corpus indicizzato **è** avvelenabile: è esattamente lo scenario coperto dal context guard. |
 | **LLM04 — Model Denial of Service** | Limite di lunghezza sulla query (`MAX_QUERY_LENGTH`), `k` di retrieval fisso, tetto di dimensione e di chunk sui file caricati, e **limiti di frequenza** sull'istanza pubblica: quota oraria per visitatore e tetto giornaliero complessivo. | `security/guardrails.py`, `uploads.py`, `security/ratelimit.py` | I contatori vivono nella memoria del processo: con più repliche servirebbe uno store condiviso. |
-| **LLM06 — Sensitive Information Disclosure** | PII masking **prima** dell'embedding: nel vector store non esiste un dato personale in chiaro. RBAC sul retrieval. Output guard che blocca PII in risposta. Audit senza query in chiaro. | `security/pii.py`, `vectorstore.py`, `security/audit.py` | Il riconoscimento è a regex: nomi non introdotti da un ruolo contrattuale possono sfuggire. Presidio risolve questo punto. |
+| **LLM06 — Sensitive Information Disclosure** | PII masking **prima** dell'embedding: nel vector store non esiste un dato personale in chiaro. Coperti anche gli identificativi indiretti — numero di polizza, sinistro, targa, telaio — compreso quello nei metadati che compone il blocco fonte del prompt. RBAC sul retrieval. Output guard che blocca PII in risposta. Audit senza query in chiaro. | `security/pii.py`, `rag.py::format_context`, `vectorstore.py`, `security/audit.py` | Il riconoscimento è a regex: restano fuori i nomi in testo libero e, soprattutto, i dati sanitari e giudiziari, che non hanno una forma riconoscibile. Vedi la tabella di copertura GDPR più sotto. |
 | **LLM07 — Insecure Plugin Design** | Non applicabile: nessun tool né azione eseguibile dal modello. Il PoC è read-only per costruzione. | — | Con LangGraph e azioni di liquidazione servirebbe human-in-the-loop obbligatorio. |
 | **LLM08 — Excessive Agency** | Il modello non può compiere azioni: nessuna scrittura, nessuna approvazione, nessuna chiamata a sistemi terzi. Lo scenario 3 della demo mostra un documento che *chiede* di approvare 50.000 EUR e resta senza effetto. | Architettura | — |
 | **LLM09 — Overreliance** | Obbligo di citare la fonte, risposta forzata a "informazione non presente" quando il contesto non copre la domanda, controllo di groundedness sull'output. | `rag.py`, `guardrails.py::_is_grounded` | Il controllo di groundedness è lessicale, non semantico: è un proxy, non una garanzia. |
 | **LLM10 — Model Theft** | Non applicabile: nessun modello proprietario ospitato. | — | — |
+
+## Copertura GDPR delle categorie di dati personali
+
+Categorie tratte da un parere legale sul trattamento di documentazione assicurativa. La distinzione
+che conta è fra ciò che ha una **forma riconoscibile** e ciò che non ne ha: le regex vedono le
+prime, sulle seconde sono cieche per costruzione.
+
+| Categoria | Esempi | Stato |
+| :--- | :--- | :--- |
+| Identificativi diretti | Nome, codice fiscale, email, telefono, data di nascita | ✅ `security/pii.py` |
+| Documenti d'identità | Patente, carta d'identità, passaporto | ✅ pattern `DOCUMENTO` |
+| Indirizzo | Residenza, ubicazione dell'immobile assicurato | ✅ pattern `INDIRIZZO` |
+| Identificativi indiretti | Numero di polizza, sinistro, pratica; IBAN; partita IVA | ✅ pattern `PRATICA`, `IBAN`, `PIVA` |
+| Beni riconducibili | Targa, numero di telaio | ✅ pattern `TARGA`, `TELAIO` |
+| **Dati sanitari (Art. 9)** | Diagnosi, referti, percentuali di invalidità | ❌ **non coperti** |
+| **Dati giudiziari (Art. 10)** | Verbali, contenziosi, precedenti | ❌ **non coperti** |
+| **Nomi di terzi in testo libero** | Testimoni, medici curanti, controparti | ⚠️ solo se introdotti da un ruolo contrattuale |
+| **Dettagli narrativi identificanti** | "Infortunio del giorno X presso la ditta Y" | ❌ **non coperti** |
+
+Le tre voci non coperte **non sono una svista**: diagnosi e verbali non hanno un formato, e nessuna
+espressione regolare potrà individuarli. Servono NER o un classificatore addestrato — Microsoft
+Presidio con un modello italiano è la strada indicata in `ROADMAP.md`. Dichiararle è preferibile a
+lasciar credere che il masking a regex copra l'Art. 9.
+
+### Pseudonimizzazione reversibile
+
+I segnaposto sono stabili (`[IBAN_001]` resta lo stesso ovunque) e la mappa inversa vive in un vault
+cifrato con Fernet, con permessi `600`, mai nel vector store e mai nel prompt.
+
+**Il comportamento predefinito è irreversibile**: senza `PII_VAULT_KEY` il vault non viene scritto e
+nessuno può ricostruire i valori originali. È la scelta più prudente, ed è quella attiva
+sull'istanza pubblica. Con la chiave configurata, i ruoli in `UNMASK_ROLES` vedono i dati reali
+ripristinati **a schermo, dopo l'output guard** — mai nel testo inviato al modello, mai nell'audit.
+
+Il vault è a sua volta un archivio di dati personali: introdurlo aumenta il valore del sistema e la
+sua superficie di rischio insieme, e va acceso solo dove esiste un controllo di accesso reale.
 
 ## Superficie di attacco dei documenti caricati dall'utente
 

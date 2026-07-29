@@ -19,6 +19,7 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 from secure_rag.config import Settings, get_settings
 from secure_rag.security.pii import PIIMasker
+from secure_rag.security.vault import VaultStore
 
 # Livelli di clearance, dal più basso al più alto. Un utente vede il proprio livello e i sottostanti.
 CLEARANCE_LEVELS: tuple[str, ...] = ("public", "agent", "management")
@@ -90,6 +91,12 @@ def build_documents(
     """
     settings = settings or get_settings()
     masker = masker or PIIMasker()
+
+    # Il vault di un'indicizzazione precedente viene ripreso, così lo stesso IBAN conserva il
+    # medesimo segnaposto fra un ingest e l'altro. Senza chiave configurata è un'operazione nulla.
+    store = VaultStore(settings.pii_vault_path, settings.pii_vault_key)
+    masker.load_vault(store.load())
+
     splitter = RecursiveCharacterTextSplitter(
         chunk_size=settings.chunk_size,
         chunk_overlap=settings.chunk_overlap,
@@ -125,6 +132,10 @@ def build_documents(
                     },
                 )
             )
+
+    # La mappa viene salvata solo se esiste una chiave: è ciò che rende il masking reversibile
+    # per chi è autorizzato, senza lasciare in giro un archivio in chiaro per tutti gli altri.
+    store.save(masker.vault)
 
     report.chunks = len(documents)
     return documents, report

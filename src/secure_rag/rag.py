@@ -38,6 +38,7 @@ from secure_rag.security.guardrails import (
     validate_output,
 )
 from secure_rag.security.pii import PIIMasker
+from secure_rag.security.vault import VaultStore
 from secure_rag.vectorstore import collection_size, get_retriever
 
 # Dove cercare: corpus aziendale, documenti caricati in sessione, o entrambi.
@@ -106,12 +107,22 @@ class RAGResponse:
         return events
 
 
-def format_context(documents: list[Document]) -> str:
-    """Compone il contesto annotando ogni estratto con la sua fonte, per la citabilità."""
+def format_context(documents: list[Document], masker: PIIMasker | None = None) -> str:
+    """Compone il contesto annotando ogni estratto con la sua fonte, per la citabilità.
+
+    Il numero di polizza passa dal masker come qualunque altro dato: vive nei **metadati**, che il
+    masking dell'ingestion non tocca, e finirebbe altrimenti nel prompt in chiaro. Per il GDPR è un
+    identificativo indiretto — anche senza il nome, un numero di polizza riporta a una persona sola.
+
+    Il nome del file resta leggibile: è un riferimento documentale, non un dato personale, ed è ciò
+    che rende la risposta verificabile.
+    """
     blocks = []
     for document in documents:
         source = document.metadata.get("source", "sconosciuto")
-        policy_id = document.metadata.get("policy_id", "")
+        policy_id = str(document.metadata.get("policy_id", ""))
+        if masker and policy_id:
+            policy_id = masker.mask(policy_id).masked_text
         blocks.append(f"[fonte: {source} · polizza {policy_id}]\n{document.page_content}")
     return "\n\n---\n\n".join(blocks)
 
@@ -122,6 +133,13 @@ class SecureRAGPipeline:
     def __init__(self, settings: Settings | None = None) -> None:
         self._settings = settings or get_settings()
         self._masker = PIIMasker()
+
+        # La mappa prodotta dall'ingestion viene ripresa qui: ingestion e interrogazione sono
+        # processi distinti, e senza questo passaggio lo stesso valore riceverebbe segnaposto
+        # diversi nei due momenti. Senza chiave configurata resta un dizionario vuoto.
+        self._vault_store = VaultStore(self._settings.pii_vault_path, self._settings.pii_vault_key)
+        self._masker.load_vault(self._vault_store.load())
+
         self._audit = AuditLogger(self._settings)
         self._llm = get_chat_model(self._settings)
         self._prompt = ChatPromptTemplate.from_template(SYSTEM_PROMPT)
@@ -207,7 +225,7 @@ class SecureRAGPipeline:
                 Document(page_content=result.masked_text, metadata=document.metadata)
             )
 
-        context = format_context(safe_documents)
+        context = format_context(safe_documents, self._masker)
         sources = sorted({str(d.metadata.get("source", "")) for d in safe_documents if d.metadata})
         uploaded_sources = sorted(
             {
@@ -250,7 +268,16 @@ class SecureRAGPipeline:
                 "Risposta bloccata dal layer di sicurezza prima della consegna.\n"
                 f"Motivo: {output_verdict.reason}"
             )
-        elif scan.quarantined:
+        elif self._puo_ripristinare(role):
+            # [6b] De-pseudonimizzazione, per i soli ruoli autorizzati.
+            #
+            # Avviene **dopo** l'output guard, e l'ordine non è casuale: il guard verifica che il
+            # modello non abbia rigenerato per conto suo dati personali che non gli erano stati
+            # forniti. Ripristinare prima glielo farebbe scattare addosso ai segnaposto che
+            # abbiamo sostituito noi, bloccando risposte legittime e nascondendo il caso vero.
+            raw_answer = self._masker.unmask(raw_answer)
+
+        if not output_verdict.blocked and scan.quarantined:
             # La quarantena va dichiarata all'utente: un documento manomesso è un incidente da
             # segnalare, non un dettaglio da nascondere dietro una risposta apparentemente normale.
             raw_answer += (
@@ -279,6 +306,20 @@ class SecureRAGPipeline:
         # [7] Audit.
         self._write_audit(question, role, response, residual_pii)
         return response
+
+    def _puo_ripristinare(self, role: str) -> bool:
+        """Se questo ruolo può vedere i dati reali al posto dei segnaposto.
+
+        Servono due condizioni insieme: un vault effettivamente disponibile (chiave configurata) e
+        un ruolo fra quelli autorizzati. Senza chiave il sistema resta in anonimizzazione
+        irreversibile, che è il comportamento predefinito e il più prudente.
+        """
+        if not self._vault_store.available:
+            return False
+        autorizzati = {
+            voce.strip() for voce in self._settings.unmask_roles.split(",") if voce.strip()
+        }
+        return role in autorizzati
 
     def _write_audit(
         self,
