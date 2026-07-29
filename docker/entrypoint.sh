@@ -7,8 +7,25 @@
 set -euo pipefail
 
 PROVIDER="${LLM_PROVIDER:-fake}"
+DOCUMENTI="${POLICIES_DIR:-/app/data/policies}"
 
 echo "→ Provider attivo: ${PROVIDER}"
+echo "→ Cartella documenti: ${DOCUMENTI}"
+
+# Verifica esplicita: senza, un percorso errato produrrebbe un ciclo di riavvii in cui l'unico
+# indizio è un messaggio d'errore che scorre via fra due intestazioni di ingestion.
+if [ ! -d "${DOCUMENTI}" ]; then
+  echo "✗ La cartella dei documenti non esiste: ${DOCUMENTI}" >&2
+  echo "  Verifica la variabile POLICIES_DIR e che l'immagine sia stata costruita con data/ dentro." >&2
+  echo "  Contenuto di /app:" >&2
+  ls -la /app >&2 || true
+  exit 1
+fi
+
+if [ "${PROVIDER}" = "fake" ]; then
+  echo "  Nota: provider deterministico offline. Per usare il modello in rete imposta"
+  echo "  LLM_PROVIDER=openai e OPENAI_API_KEY nel file .env."
+fi
 
 # Verifica l'indice senza toccarlo. Si tiene solo l'ultima riga e la si valida: eventuali
 # messaggi delle librerie su stdout non devono trasformarsi in un confronto numerico fallito,

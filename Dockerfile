@@ -31,6 +31,18 @@ ENV PATH="/opt/venv/bin:$PATH" \
     PYTHONDONTWRITEBYTECODE=1 \
     STREAMLIT_SERVER_HEADLESS=true
 
+# I percorsi vanno dichiarati esplicitamente.
+#
+# `Settings` li deriva da `PROJECT_ROOT`, che risale di due livelli dal modulo: corretto quando il
+# codice sta in `src/secure_rag/`, sbagliato qui, dove il pacchetto è **installato** e quindi vive
+# in `site-packages` — la root calcolata diventerebbe `/opt/venv/lib/python3.12`.
+#
+# Sono campi di `Settings`, quindi pydantic-settings li legge dall'ambiente senza modifiche al
+# codice. Il compose può comunque sovrascriverli.
+ENV POLICIES_DIR=/app/data/policies \
+    CHROMA_BASE_DIR=/app/chroma_db \
+    AUDIT_LOG_PATH=/app/logs/audit.jsonl
+
 # Utente non privilegiato: se l'applicazione viene compromessa, non è root a eseguirla.
 RUN useradd --create-home --uid 10001 secure
 

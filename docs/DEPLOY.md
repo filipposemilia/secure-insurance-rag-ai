@@ -35,7 +35,8 @@ cd secure-insurance-rag-ai
 cp .env.example .env
 ```
 
-In `.env`:
+In `.env` — **`LLM_PROVIDER` va cambiato**: l'esempio contiene `fake`, che fa rispondere l'istanza
+offline senza mai interrogare il modello.
 
 ```ini
 LLM_PROVIDER=openai
@@ -138,7 +139,9 @@ docker compose up -d --build
 | Pagina ferma su "Please wait…" | WebSocket non inoltrati | Websockets Support ON nel Proxy Host |
 | `AxiosError` / errori XSRF | Origine non coerente | Force SSL attivo e accesso solo via HTTPS |
 | L'audit mostra sempre lo stesso IP | `X-Forwarded-For` assente | Verificare che il traffico passi dal proxy e che la porta non sia esposta pubblicamente |
+| `Cartella documenti non trovata: /opt/venv/...` | Percorsi non dichiarati | Nell'immagine il pacchetto è installato in `site-packages`, quindi la root dedotta dal modulo cade dentro il venv. Il Dockerfile dichiara `POLICIES_DIR`, `CHROMA_BASE_DIR` e `AUDIT_LOG_PATH`: verifica di non averli sovrascritti con valori errati |
 | Il container riparte in ciclo | Ingestion fallita | `docker compose logs`: quasi sempre `OPENAI_API_KEY` mancante o senza credito |
+| Nei log compare `Provider attivo: fake` | `.env` copiato da `.env.example` | L'esempio contiene `LLM_PROVIDER=fake`: va cambiato in `openai`, altrimenti l'istanza risponde offline |
 | Ingestion a ogni riavvio | Volume non montato | Verificare `chroma-index` in `docker volume ls` |
 | Emissione del certificato fallita | DNS non propagato | `dig +short insurai.aicorelabs.io` e riprovare |
 
