@@ -288,7 +288,7 @@ controllo degli accessi in azione invece di descriverlo.
 
 ---
 
-## ADR-017 — L'anonimizzazione non passa da un LLM
+## ADR-017 — L'anonimizzazione non passa da un LLM esterno
 
 **Contesto.** La tentazione, potendo chiamare un modello, è chiedergli «rimuovi i dati personali da
 questo documento». È l'approccio che un parere legale sul GDPR per il settore assicurativo scarta
@@ -305,6 +305,15 @@ locale — non un LLM.
    riconoscimento è una fuga di dati; una riscrittura è un contratto alterato. Le regex sbagliano in
    modo prevedibile e verificabile con un test.
 3. Costo e latenza per un compito che una regex risolve in microsecondi.
+
+**Precisazione importante — vale solo per gli LLM esterni.** La prima obiezione, che è la più
+grave, **cade completamente** se il modello gira su infrastruttura propria: non esiste un terzo e
+non c'è alcun trasferimento fuori dal perimetro. Restano la seconda e la terza, che dipendono dalla
+natura dello strumento e non da dove è ospitato.
+
+Ne segue che un LLM locale non va escluso, va **assegnato al compito giusto**: non i formati rigidi,
+che una regex risolve meglio e più in fretta, ma i dati sanitari, giudiziari e la narrativa
+identificante — le uniche categorie che né le regex né il NER possono vedere. Si veda ADR-019.
 
 **Conseguenze.** Il limite è dichiarato invece che aggirato: dati sanitari e giudiziari restano
 scoperti perché non hanno una forma riconoscibile, ed è scritto in `docs/SECURITY.md`. Il masking
@@ -337,3 +346,61 @@ autorizzato da distinguere.
 c'era: **un archivio di dati personali da proteggere**. È un aumento di capacità e di rischio
 insieme, e per questo è opt-in. `cryptography` è una dipendenza opzionale (`.[vault]`): se manca, il
 sistema si comporta come se la chiave fosse assente invece di scrivere in chiaro.
+
+---
+
+## ADR-019 — Anonimizzazione a tre livelli e servizi in compartimenti separati
+
+**Contesto.** ADR-017 scarta l'uso di un LLM per anonimizzare, ma la sua obiezione principale — si
+manderebbero i dati in chiaro a un terzo — riguarda i **modelli esterni**. Con un modello ospitato
+sull'infrastruttura della compagnia quell'argomento non esiste, e restano scoperte proprio le
+categorie che regex e NER non possono vedere: dati sanitari (Art. 9), giudiziari (Art. 10) e
+narrativa identificante («infortunio durante il turno presso la ditta X il giorno Y»).
+
+Serve quindi distinguere *dove* gira il modello da *cosa* gli si chiede di fare.
+
+**Decisione — anonimizzazione a livelli, ciascuno per ciò che sa fare.**
+
+| Livello | Strumento | Copre | Ordine di grandezza |
+| :--- | :--- | :--- | :--- |
+| 1 | Regex deterministiche (`security/pii.py`) | Formati rigidi: CF, IBAN, polizza, targa, telaio | microsecondi |
+| 2 | Presidio + NER italiano | Nomi e organizzazioni in testo libero | millisecondi |
+| 3 | **LLM locale** | Dati sanitari e giudiziari, narrativa identificante | secondi |
+
+Il livello 3 si applica **solo ai segmenti che i primi due non hanno risolto**, non all'intero
+documento: è ciò che rende sostenibile un costo per pagina di secondi invece di microsecondi. Ed è
+un ordine di precedenza, non un'alternativa: dove una regex basta, l'LLM è lo strumento peggiore —
+più lento e non ripetibile.
+
+**Decisione — servizi separati, con l'inferenza isolata dalla rete.**
+
+```
+[app]  →  [anonimizzatore]  →  [vector db]
+             ↓ (rete interna, nessun egress)
+        [llm locale]
+```
+
+Quattro container distinti: applicazione, anonimizzazione (Presidio ha immagini Docker ufficiali),
+vector store, inferenza. Le ragioni, in ordine di importanza:
+
+1. **Il container di inferenza non ha accesso a internet.** L'argomento di compliance non è più
+   «garantiamo che i dati non escano», ma «non esiste un percorso attraverso cui possano uscire». È
+   verificabile da un auditor guardando la configurazione di rete.
+2. **Il modello che anonimizza va tenuto distinto da quello che genera.** Se coincidessero,
+   un'istruzione nascosta in un documento potrebbe influenzare entrambi — e il primo è quello che
+   vede i dati **in chiaro**, prima del mascheramento.
+3. Profili di risorse diversi: l'inferenza vuole GPU o molta RAM, il vector store vuole disco,
+   l'applicazione quasi nulla. Separarli permette di collocarli su macchine diverse senza toccare il
+   codice.
+
+**Conseguenze.** L'anonimizzatore **tratta dati personali in chiaro**: rientra nel perimetro come
+qualunque altro componente, quindi log delle richieste disattivati e nessuna persistenza del
+contesto. È un punto che sfugge facilmente, perché lo si pensa come "il componente che protegge" e
+non come "un componente che vede tutto".
+
+Il costo è in risorse: un modello da 8 miliardi di parametri quantizzato richiede circa 5 GB di RAM,
+Presidio con il modello linguistico grande circa 1 GB. **Sull'attuale VPS non c'è margine** (si veda
+`ROADMAP.md`), per questo il progetto usa oggi un modello esterno per la generazione e non ha ancora
+i livelli 2 e 3. L'architettura a container è però ciò che permette di aggiungerli in seguito, anche
+su una macchina diversa, senza riscrivere l'applicazione: `providers.py` astrae già il fornitore, e
+`PIIMasker` la firma del mascheratore.
