@@ -1,5 +1,21 @@
 # 🛡️ Secure Insurance RAG AI
 
+### ▶ [Prova l'istanza pubblica → insurag.aicorelabs.io](https://insurag.aicorelabs.io)
+
+Nessuna installazione. Il percorso più breve per capire cosa fa: premi la domanda pronta **«Margine
+di trattativa»** prima come *Agente di rete*, poi come *Direzione Sinistri*. È la stessa domanda, e
+la risposta cambia — perché il controllo degli accessi agisce sul **retrieval**, non sul testo
+generato: il documento riservato non entra proprio nel prompt.
+
+Poi apri la scheda **🛡️ Sicurezza** e lancia lo scenario di *prompt injection indiretta*:
+un'istruzione nascosta dentro una perizia, che il sistema mette in quarantena e dichiara nella
+risposta invece di eseguirla.
+
+> L'istanza pubblica ha limiti di frequenza attivi e serve documenti sintetici. Raggiunto il tetto
+> giornaliero non smette di funzionare: passa al motore deterministico offline.
+
+---
+
 PoC di **RAG sicuro su documentazione assicurativa**. Il retrieval-augmented generation è la parte
 facile: quello che rende un sistema del genere utilizzabile in una compagnia assicurativa è ciò che
 sta attorno — anonimizzazione dei dati personali prima che lascino il perimetro, difesa contro la
