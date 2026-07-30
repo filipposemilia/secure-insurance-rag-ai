@@ -295,8 +295,9 @@ questo documento». È l'approccio che un parere legale sul GDPR per il settore 
 esplicitamente, e le ragioni reggono da sole.
 
 **Decisione.** Il masking resta deterministico e locale (`security/pii.py`), eseguito **prima** di
-qualunque chiamata di rete. L'evoluzione prevista è Presidio con un modello NER italiano — sempre in
-locale — non un LLM.
+qualunque chiamata di rete. L'evoluzione è Presidio con un modello NER italiano — sempre in locale —
+non un LLM esterno. *Realizzata in ADR-020: il livello 2 gira nel processo dell'applicazione, e il
+modello linguistico non fa alcuna chiamata di rete.*
 
 **Motivo.** Tre problemi, in ordine di gravità:
 1. **Sarebbe una violazione in sé**: si invierebbero i dati personali in chiaro al fornitore esterno

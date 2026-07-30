@@ -137,7 +137,7 @@ un'architettura enterprise: **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**.
 | LLM01 — Prompt Injection diretta | Input guard a pattern, blocco pre-modello | `security/guardrails.py` |
 | LLM01 — Prompt Injection indiretta | Scansione dei chunk recuperati + delimitatori rigidi nel prompt | `security/guardrails.py`, `rag.py` |
 | LLM04 — Denial of Service | Limite di lunghezza query, `k` di retrieval fisso | `security/guardrails.py` |
-| LLM06 — Sensitive Information Disclosure | Masking pre-embedding a due livelli (regex + NER opzionale), RBAC sul retrieval, output guard, audit senza query in chiaro | `security/pii.py`, `security/ner.py`, `vectorstore.py`, `security/audit.py` |
+| LLM06 — Sensitive Information Disclosure | Masking pre-embedding a due livelli, regex + NER, entrambi attivi in produzione; RBAC sul retrieval, output guard, audit senza query in chiaro | `security/pii.py`, `security/ner.py`, `vectorstore.py`, `security/audit.py` |
 | LLM08 — Excessive Agency | Sistema read-only: il modello non compie azioni | architettura |
 | LLM09 — Overreliance | `temperature=0`, obbligo di citazione, formula di non-risposta, controllo di groundedness | `rag.py`, `security/guardrails.py` |
 
@@ -200,10 +200,12 @@ cp .env.example .env      # provider, API key e limiti di frequenza
 docker compose up -d --build
 ```
 
-Al primo avvio il container indicizza il corpus (anonimizzazione inclusa) e lo conserva su un
-volume, così i riavvii successivi non ripagano gli embedding. La porta è pubblicata **solo su
-loopback**: l'unico percorso verso l'applicazione passa dal proxy, ed è ciò che rende attendibile
-l'header `X-Forwarded-For` su cui si basano i limiti di frequenza.
+Al primo avvio il container indicizza il corpus (anonimizzazione a due livelli inclusa) e lo conserva
+su un volume, così i riavvii successivi non ripagano gli embedding — a meno che il livello di
+anonimizzazione configurato non coincida con quello registrato nell'indice, nel qual caso viene
+rifatto. La porta è pubblicata **solo su loopback**: l'unico percorso verso l'applicazione passa dal
+proxy, ed è ciò che rende attendibile l'header `X-Forwarded-For` su cui si basano i limiti di
+frequenza.
 
 Procedura completa, configurazione del proxy e problemi frequenti: **[docs/DEPLOY.md](docs/DEPLOY.md)**.
 
@@ -211,11 +213,14 @@ Procedura completa, configurazione del proxy e problemi frequenti: **[docs/DEPLO
 
 - **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** — i quattro layer, il flusso di una richiesta, i punti di estensione
 - **[docs/SECURITY.md](docs/SECURITY.md)** — threat model, mapping OWASP Top 10 for LLM, limiti dichiarati
-- **[docs/DECISIONS.md](docs/DECISIONS.md)** — ADR: perché il masking a monte, perché i guard fuori dalla catena, perché al tetto di spesa si degrada invece di bloccare
+- **[docs/DECISIONS.md](docs/DECISIONS.md)** — ADR: perché il masking a monte, perché i guard fuori dalla catena, perché il NER è affiancato alle regex e non le sostituisce, perché l'indice dichiara con cosa è stato costruito, perché al tetto di spesa si degrada invece di bloccare
 - **[docs/DEPLOY.md](docs/DEPLOY.md)** — pubblicazione in container dietro reverse proxy
-- **[ROADMAP.md](ROADMAP.md)** — cosa manca e con quale sforzo (Presidio, LangGraph, hybrid search, Qdrant…)
+- **[ROADMAP.md](ROADMAP.md)** — cosa manca e con quale sforzo (LLM locale per i dati sanitari, hybrid search, LangGraph, Qdrant…)
 
 ## Stack
 
-Python 3.12 · LangChain (LCEL) · ChromaDB · Streamlit · pydantic-settings · pytest · uv · Docker
-Opzionali: Microsoft Presidio + spaCy (anonimizzazione livello 2) · cryptography (vault)
+Python 3.12 · LangChain (LCEL) · ChromaDB · **Microsoft Presidio + spaCy** · Streamlit ·
+pydantic-settings · pytest · uv · Docker
+
+Presidio e `cryptography` sono extra di `pyproject.toml` (`.[presidio]`, `.[vault]`): nell'immagine
+Docker sono installati, in un'ambiente da sorgente si aggiungono quando servono.
