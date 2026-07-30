@@ -215,7 +215,8 @@ Procedura completa, configurazione del proxy e problemi frequenti: **[docs/DEPLO
 - **[docs/SECURITY.md](docs/SECURITY.md)** — threat model, mapping OWASP Top 10 for LLM, limiti dichiarati
 - **[docs/DECISIONS.md](docs/DECISIONS.md)** — ADR: perché il masking a monte, perché i guard fuori dalla catena, perché il NER è affiancato alle regex e non le sostituisce, perché l'indice dichiara con cosa è stato costruito, perché al tetto di spesa si degrada invece di bloccare
 - **[docs/DEPLOY.md](docs/DEPLOY.md)** — pubblicazione in container dietro reverse proxy
-- **[ROADMAP.md](ROADMAP.md)** — cosa manca e con quale sforzo (LLM locale per i dati sanitari, hybrid search, LangGraph, Qdrant…)
+- **[ROADMAP.md](ROADMAP.md)** — cosa manca a questo codice e con quale sforzo (LLM locale per i dati sanitari, hybrid search, LangGraph, Qdrant…)
+- **[docs/FEATURE.md](docs/FEATURE.md)** — cosa diventerebbe dentro l'infrastruttura di una compagnia: SOC e SIEM, classificazione dei dati gestita dal CISO, confidential computing, red teaming in CI
 
 ## Stack
 

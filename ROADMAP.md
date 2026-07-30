@@ -33,6 +33,11 @@ Non implementato per scelta. Ogni voce indica cosa aggiungerebbe e perché è st
 il vincolo di tempo iniziale, alcune perché servirebbe un dataset annotato che non esiste, una — l'LLM
 locale — perché cambia la classe di hardware necessaria.
 
+> Questo è il backlog **di questo repository**. Per l'evoluzione dentro l'infrastruttura di una
+> compagnia — integrazione con un SOC, classificazione dei dati gestita dal CISO, confidential
+> computing, red teaming in CI — si veda **[docs/FEATURE.md](docs/FEATURE.md)**. Dove le due si
+> sovrappongono, **lo sforzo autorevole è quello di questa tabella**.
+
 ### Sicurezza
 
 | Voce | Cosa aggiunge | Perché non ora | Sforzo |
