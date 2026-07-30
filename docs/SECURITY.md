@@ -46,6 +46,7 @@ una diagnosi — nessuno dei due strumenti può fare nulla.
 | **Dati giudiziari (Art. 10)** | Verbali, contenziosi, precedenti | ❌ **non coperti** |
 | **Nomi di terzi in testo libero** | Testimoni, medici curanti, controparti | ✅ **livello 2** (attivo in produzione) · ⚠️ senza di esso, solo se introdotti da un ruolo contrattuale |
 | **Dettagli narrativi identificanti** | "Infortunio del giorno X presso la ditta Y" | ❌ **non coperti** |
+| **Nomi di persona nel nome di un file** | `perizia Mario Rossi.pdf` | ❌ **non coperti** — sui metadati gira il solo livello 1 |
 
 Le due voci non coperte **non sono una svista**: diagnosi e verbali non hanno un formato, e nessuna
 espressione regolare potrà individuarli. Nemmeno il NER li vede, perché non sono entità: sono
@@ -85,6 +86,17 @@ qualcuno lo veda. Per la stessa ragione l'indice porta una marca con i livelli u
 viene rifatto quando non coincidono con la configurazione: un indice con segnaposto di livello 1 sotto
 un'interfaccia che dichiara il livello 2 sarebbe un'incoerenza fra ciò che il sistema afferma e ciò
 che il retrieval contiene.
+
+**I metadati che entrano nel prompt passano dal livello 1, non dal 2.** Il blocco `[fonte: … ·
+polizza …]` che rende citabile una risposta è composto a runtime dai metadati, che l'anonimizzazione
+dell'ingestion non attraversa: senza mascherarli, un identificativo tolto dal contenuto rientrerebbe
+da lì. Vale per il numero di polizza e per il **nome del file**, che su un documento caricato lo
+sceglie l'utente — e un allegato di sinistro, nel mondo reale, si chiama con il numero di sinistro.
+
+Il livello 2 è escluso da questo passaggio di proposito: un nome di file è una stringa breve senza
+contesto linguistico, e il modello vi riconosce nomi di persona che non ci sono
+(`polizza_multirischio_impresa.md` → `[NOME_001]`), distruggendo la citazione. Il limite che ne
+deriva è nella tabella sopra.
 
 Scelte e alternative scartate di questo livello: **ADR-020** in `docs/DECISIONS.md`.
 

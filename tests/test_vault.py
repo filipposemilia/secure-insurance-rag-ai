@@ -133,8 +133,78 @@ def test_il_numero_di_polizza_non_entra_nel_contesto():
 
     assert "MRI-2026-004417" not in contesto
     assert "[PRATICA_001]" in contesto
-    # Il nome del file resta: è un riferimento documentale, non un dato personale.
+    # Il nome di un file del corpus non corrisponde ad alcun pattern: resta leggibile, e con esso
+    # la citazione che rende verificabile la risposta.
     assert "polizza.md" in contesto
+
+
+def test_il_nome_del_file_caricato_non_porta_identificativi_nel_prompt():
+    """Regressione: il masking usciva dal testo e rientrava dal nome del file.
+
+    Nel mondo reale un allegato di sinistro si chiama con il numero di sinistro, e il nome di un
+    documento caricato lo sceglie chi lo carica: senza mascherarlo, l'identificativo tolto dal
+    contenuto tornerebbe nel prompt attraverso il blocco `[fonte: …]`.
+    """
+    documento = Document(
+        page_content="Il danno è stato liquidato.",
+        metadata={
+            "source": "Sinistro SIN-2026-118234, polizza RCA-2025-889201.pdf",
+            "policy_id": "documento caricato in sessione",
+        },
+    )
+
+    contesto = format_context([documento], PIIMasker())
+
+    assert "SIN-2026-118234" not in contesto
+    assert "RCA-2025-889201" not in contesto
+    # Il riferimento resta citabile: cambia l'identificativo, non la struttura della fonte.
+    assert "[fonte: Sinistro [PRATICA_001], polizza [PRATICA_002].pdf" in contesto
+
+
+def test_il_livello_2_non_maschera_il_nome_del_file():
+    """Regressione trovata provando il prompt reale: `polizza_multirischio_impresa.md` diventava
+    `[NOME_001]`, perché un nome di file non ha contesto linguistico e il NER ci legge una persona.
+
+    La citazione è ciò che rende verificabile la risposta: perderla costa più di quanto guadagni
+    mascherare un nome di file.
+    """
+
+    class NerCheVedeNomiOvunque:
+        model_name = "stub"
+        available = True
+
+        def analyze(self, text, threshold):
+            from secure_rag.security.ner import NerSpan
+
+            return [NerSpan(0, len(text), "NOME", 0.99)] if text else []
+
+    masker = PIIMasker(ner=NerCheVedeNomiOvunque())
+    documento = Document(
+        page_content="La franchigia è di 2.500 EUR.",
+        metadata={"source": "polizza_multirischio_impresa.md", "policy_id": "MRI-2026-004417"},
+    )
+
+    contesto = format_context([documento], masker)
+
+    assert "polizza_multirischio_impresa.md" in contesto
+    # L'identificativo, che una forma ce l'ha, resta mascherato dal livello 1.
+    assert "MRI-2026-004417" not in contesto
+
+
+def test_lo_stesso_identificativo_nel_nome_e_nel_testo_riceve_un_solo_segnaposto():
+    """La coerenza referenziale vale anche fra contenuto e metadati, o la citazione si slega."""
+    masker = PIIMasker()
+    # Come nella pipeline (`rag.py`): il contenuto del chunk passa dal masker prima del contesto.
+    contenuto = masker.mask("La pratica SIN-2026-118234 è chiusa.").masked_text
+    documento = Document(
+        page_content=contenuto,
+        metadata={"source": "SIN-2026-118234.pdf", "policy_id": ""},
+    )
+
+    contesto = format_context([documento], masker)
+
+    assert contesto.count("[PRATICA_001]") == 2
+    assert "SIN-2026-118234" not in contesto
 
 
 def test_senza_masker_il_contesto_resta_invariato():

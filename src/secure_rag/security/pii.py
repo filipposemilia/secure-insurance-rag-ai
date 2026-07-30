@@ -154,18 +154,7 @@ class PIIMasker:
     def mask(self, text: str) -> MaskingResult:
         """Restituisce il testo anonimizzato e l'elenco delle entità sostituite."""
         entities: list[PIIEntity] = []
-        masked = text
-
-        for entity_type, pattern in _PATTERNS:
-            masked = pattern.sub(
-                lambda match, _type=entity_type: self._substitute(match.group(0), _type, entities),
-                masked,
-            )
-
-        for name in self._extra_names:
-            if name in masked:
-                placeholder = self._placeholder_for(name, "NOME", entities)
-                masked = masked.replace(name, placeholder)
+        masked = self._mask_deterministic(text, entities)
 
         # Il livello 2 arriva per ultimo, sul testo già ripulito dalle regex: è l'ordine di
         # precedenza di ADR-019. Dove un pattern deterministico ha già risposto, un modello
@@ -173,6 +162,26 @@ class PIIMasker:
         masked = self._apply_ner(masked, entities)
 
         return MaskingResult(masked_text=masked, entities=entities)
+
+    def mask_metadata(self, value: str) -> str:
+        """Maschera un valore di metadato — nome del file, identificativo di pratica — con il **solo
+        livello 1**.
+
+        Il livello 2 è deliberatamente escluso, e non è una semplificazione. Un metadato è una
+        stringa breve **senza contesto linguistico**, cioè la condizione in cui un modello di entità
+        lavora peggio: su `polizza_multirischio_impresa.md` riconosce un nome di persona, e
+        mascherarlo distruggerebbe la citazione che rende verificabile la risposta. Le regex
+        guardano la forma e non la frase, quindi qui sono lo strumento adatto — e un identificativo
+        di pratica o di sinistro *ha* una forma.
+
+        Il vault è condiviso con `mask()`: lo stesso valore riceve lo stesso segnaposto nel contenuto
+        e nei metadati, altrimenti la citazione si slegherebbe dal testo che accompagna.
+
+        **Limite dichiarato:** un nome di persona dentro il nome di un file — `perizia Mario
+        Rossi.pdf` — non viene mascherato. È il rovescio della scelta, ed è preferibile a citazioni
+        illeggibili.
+        """
+        return self._mask_deterministic(value, [])
 
     @property
     def ner_active(self) -> bool:
@@ -252,6 +261,22 @@ class PIIMasker:
                 self._counters[entity_type] = max(self._counters.get(entity_type, 0), numero)
 
     # -------------------------------------------------------------- interni
+
+    def _mask_deterministic(self, text: str, entities: list[PIIEntity]) -> str:
+        """Livello 1: regex sui formati rigidi più il dizionario di nomi noti."""
+        masked = text
+        for entity_type, pattern in _PATTERNS:
+            masked = pattern.sub(
+                lambda match, _type=entity_type: self._substitute(match.group(0), _type, entities),
+                masked,
+            )
+
+        for name in self._extra_names:
+            if name in masked:
+                placeholder = self._placeholder_for(name, "NOME", entities)
+                masked = masked.replace(name, placeholder)
+
+        return masked
 
     def _ner_spans(self, text: str, threshold: float) -> list[NerSpan]:
         """Span del livello 2, già ripuliti dal lessico contrattuale.

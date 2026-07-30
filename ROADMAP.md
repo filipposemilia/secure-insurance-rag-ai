@@ -14,8 +14,8 @@
 | 6 | Anonimizzazione approfondita: identificativi indiretti dell'elenco GDPR, vault cifrato per la pseudonimizzazione reversibile | ✅ |
 | 7 | **Livello 2 dell'anonimizzazione**: Presidio + NER italiano affiancato alle regex, opzionale da sorgente e **attivo in produzione**, con fallback dichiarato e reindicizzazione automatica al cambio di livello (ADR-020, ADR-021) | ✅ |
 
-Test: 137, tutti offline (`.venv/bin/pytest -q`), inclusi quelli di regressione su interfaccia e
-limiti di frequenza. La suite gira identica con e senza Presidio installato: 137 verdi con, 134 più 3
+Test: 140, tutti offline (`.venv/bin/pytest -q`), inclusi quelli di regressione su interfaccia e
+limiti di frequenza. La suite gira identica con e senza Presidio installato: 140 verdi con, 137 più 3
 salti senza.
 
 **Cosa gira oggi in produzione.** La generazione usa **OpenAI `gpt-4o-mini`**, un modello esterno.

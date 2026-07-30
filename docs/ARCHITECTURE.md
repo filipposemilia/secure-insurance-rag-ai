@@ -105,7 +105,7 @@ differenza fra una difesa che fa risparmiare e una che fa solo evitare il danno.
 | 1 | Input guard | `security/guardrails.py` | Prompt injection diretta, jailbreak, esfiltrazione. Blocca **prima** della chiamata al modello: una richiesta malevola non costa token. |
 | 2 | Retrieval con RBAC | `vectorstore.py` | Accesso a documenti fuori dal livello di clearance. Il filtro è nella query al vector store, non a valle. |
 | 3 | Context guard | `security/guardrails.py` | Prompt injection **indiretta**: istruzioni nascoste nei documenti indicizzati o caricati. |
-| 4 | PII guard sul contesto | `security/pii.py`, `security/ner.py` | Rete di sicurezza sui chunk, **e mascheramento dei metadati**: il numero di polizza vive lì e non passa dall'anonimizzazione dell'ingestion. |
+| 4 | PII guard sul contesto | `security/pii.py`, `security/ner.py` | Rete di sicurezza sui chunk, **e mascheramento dei metadati** — numero di polizza *e nome del file*: vivono lì e non passano dall'anonimizzazione dell'ingestion. Sui metadati gira il solo livello 1 (ADR-020, punto 7). |
 | 5 | Catena LCEL | `rag.py` | Allucinazioni: delimitatori rigidi, obbligo di citare la fonte, `temperature=0`. |
 | 6 | Output guard | `security/guardrails.py` | Fuga di dati personali in risposta e risposte non ancorate al contesto. |
 | 6b | Ripristino | `rag.py`, `security/vault.py` | Nulla: è un passo di usabilità, non di sicurezza. Attivo solo con vault configurato e per i ruoli in `UNMASK_ROLES`. |

@@ -110,19 +110,31 @@ class RAGResponse:
 def format_context(documents: list[Document], masker: PIIMasker | None = None) -> str:
     """Compone il contesto annotando ogni estratto con la sua fonte, per la citabilità.
 
-    Il numero di polizza passa dal masker come qualunque altro dato: vive nei **metadati**, che il
-    masking dell'ingestion non tocca, e finirebbe altrimenti nel prompt in chiaro. Per il GDPR è un
-    identificativo indiretto — anche senza il nome, un numero di polizza riporta a una persona sola.
+    **Tutti i metadati che entrano nel prompt passano dal masker**, non solo il contenuto dei chunk:
+    i metadati non attraversano il masking dell'ingestion, e finirebbero altrimenti in chiaro.
 
-    Il nome del file resta leggibile: è un riferimento documentale, non un dato personale, ed è ciò
-    che rende la risposta verificabile.
+    Vale per il numero di polizza, che per il GDPR è un identificativo indiretto — anche senza il
+    nome, riporta a una persona sola — e vale per il **nome del file**. Quest'ultimo sembra un
+    riferimento documentale innocuo, e per il corpus aziendale lo è: `polizza_rc_professionale.md`
+    non corrisponde ad alcun pattern, quindi resta leggibile e la citazione resta verificabile. Ma su
+    un documento caricato il nome lo sceglie chi carica, e nel mondo reale un allegato di sinistro si
+    chiama proprio con il numero di sinistro: senza questo passaggio l'identificativo arriverebbe al
+    modello in chiaro dopo essere stato tolto dal testo.
+
+    Il nome originale continua a comparire **nell'interfaccia**, che elenca le fonti a chi ha
+    caricato il documento: il masking riguarda ciò che viene inviato al modello, non ciò che l'utente
+    vede.
     """
     blocks = []
     for document in documents:
-        source = document.metadata.get("source", "sconosciuto")
+        source = str(document.metadata.get("source", "sconosciuto"))
         policy_id = str(document.metadata.get("policy_id", ""))
-        if masker and policy_id:
-            policy_id = masker.mask(policy_id).masked_text
+        if masker:
+            # `mask_metadata` applica il solo livello 1: su una stringa senza contesto linguistico
+            # il NER scambia un nome di file per un nome di persona, e la citazione si perde.
+            source = masker.mask_metadata(source)
+            if policy_id:
+                policy_id = masker.mask_metadata(policy_id)
         blocks.append(f"[fonte: {source} · polizza {policy_id}]\n{document.page_content}")
     return "\n\n---\n\n".join(blocks)
 

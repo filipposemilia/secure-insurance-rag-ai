@@ -447,6 +447,13 @@ e la demo deve restare installabile in un minuto.
    uscita un falso positivo sopprime una risposta già pagata in token. Con `it_core_news_lg` i
    punteggi sono costanti e il meccanismo è latente: diventa effettivo con un modello che produca
    confidenze graduate.
+7. **Sui metadati gira il solo livello 1** (`PIIMasker.mask_metadata`). Un nome di file o un
+   identificativo di pratica sono stringhe brevi **senza contesto linguistico**, cioè la condizione
+   in cui un modello di entità lavora peggio: provando il prompt reale,
+   `polizza_multirischio_impresa.md` diventava `[NOME_001]`, e con esso spariva la citazione che
+   rende verificabile la risposta. Le regex guardano la forma e non la frase, e un numero di sinistro
+   *ha* una forma. Il vault resta condiviso, così lo stesso identificativo ha lo stesso segnaposto nel
+   contenuto e nei metadati.
 
 **Alternative scartate.** *Sostituire le regex con Presidio*: si perderebbero determinismo,
 ripetibilità e i test che coprono i formati italiani, in cambio di un rilevatore che sugli stessi
@@ -461,6 +468,11 @@ costante.
 `data/policies/`). In cambio entrano due oneri nuovi: l'elenco del lessico contrattuale va mantenuto
 quando cambia il vocabolario dei documenti, e **un mancato riconoscimento non produce alcun segnale**
 — un rilevatore probabilistico aumenta la copertura, non la garanzia.
+
+Il punto 7 lascia un limite da dichiarare, non da nascondere: **un nome di persona dentro il nome di
+un file** — `perizia Mario Rossi.pdf` — arriva al modello in chiaro. È il rovescio della scelta, ed è
+preferibile a citazioni illeggibili: entrambi i lati di questo compromesso sono falsi negativi contro
+falsi positivi, e qui i secondi costano di più.
 
 **Sull'istanza pubblica il livello 2 è attivo**: il modello è nell'immagine Docker con la versione
 fissata, e `PII_NER_ENABLED` vale `true` nel compose. Nell'installazione da sorgente resta spento,
