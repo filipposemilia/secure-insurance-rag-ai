@@ -37,7 +37,7 @@ from secure_rag.security.guardrails import (
     validate_input,
     validate_output,
 )
-from secure_rag.security.pii import PIIMasker
+from secure_rag.security.pii import PIIMasker, build_masker
 from secure_rag.security.vault import VaultStore
 from secure_rag.vectorstore import collection_size, get_retriever
 
@@ -132,7 +132,7 @@ class SecureRAGPipeline:
 
     def __init__(self, settings: Settings | None = None) -> None:
         self._settings = settings or get_settings()
-        self._masker = PIIMasker()
+        self._masker = build_masker(self._settings)
 
         # La mappa prodotta dall'ingestion viene ripresa qui: ingestion e interrogazione sono
         # processi distinti, e senza questo passaggio lo stesso valore riceverebbe segnaposto

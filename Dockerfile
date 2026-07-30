@@ -20,8 +20,22 @@ WORKDIR /build
 COPY pyproject.toml README.md ./
 COPY src/ ./src/
 
+# L'extra `presidio` porta il livello 2 dell'anonimizzazione (NER sui nomi in testo libero).
+# Il modello linguistico non sta su PyPI: si installa dalla release di spaCy, con la versione
+# **fissata**. `python -m spacy download` risolverebbe la versione compatibile al momento della
+# build, e due build a distanza di mesi produrrebbero immagini diverse a partire dallo stesso
+# Dockerfile.
+#
+# Costo: circa 700 MB di immagine fra spaCy, le sue dipendenze e il modello (541 MB da soli). A
+# runtime il modello aggiunge **~870 MB di RSS misurati**, caricati una volta sola per processo e
+# condivisi da tutte le sessioni: non è un costo per visitatore.
+ARG MODELLO_NER=it_core_news_lg
+ARG VERSIONE_NER=3.8.0
+
 RUN uv venv /opt/venv --python 3.12 \
-    && VIRTUAL_ENV=/opt/venv uv pip install --no-cache .
+    && VIRTUAL_ENV=/opt/venv uv pip install --no-cache ".[presidio]" \
+    && VIRTUAL_ENV=/opt/venv uv pip install --no-cache \
+       "https://github.com/explosion/spacy-models/releases/download/${MODELLO_NER}-${VERSIONE_NER}/${MODELLO_NER}-${VERSIONE_NER}-py3-none-any.whl"
 
 # --- Stadio 2: runtime -------------------------------------------------------
 FROM python:3.12-slim AS runtime

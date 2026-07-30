@@ -21,11 +21,12 @@ import sys
 from dataclasses import dataclass
 
 from secure_rag.config import ProviderName, Settings, get_settings
-from secure_rag.ingestion import CLEARANCE_LEVELS, build_documents
+from secure_rag.ingestion import CLEARANCE_LEVELS, build_documents, write_index_stamp
 from secure_rag.providers import ProviderStatus, describe_provider, probe_providers
 from secure_rag.rag import RAGResponse, SecureRAGPipeline
 from secure_rag.security.audit import AuditLogger
-from secure_rag.security.pii import PIIMasker
+from secure_rag.security.ner import ner_unavailable_reason
+from secure_rag.security.pii import build_masker
 from secure_rag.vectorstore import collection_size, index_documents
 
 BOLD = "\033[1m"
@@ -134,13 +135,19 @@ def cmd_ingest(args: argparse.Namespace) -> int:
     print(f"Cartella documenti  : {settings.policies_dir}")
     print(f"Indice di destinazione: {settings.chroma_dir}")
 
-    masker = PIIMasker()
+    masker = build_masker(settings)
     documents, report = build_documents(settings, masker)
     written = index_documents(documents, settings)
+    # La marca va scritta dopo l'indicizzazione: se questa fallisse, un indice vecchio non deve
+    # risultare costruito con i livelli nuovi.
+    write_index_stamp(settings, report.anonymization_levels)
 
     print(f"\n{GREEN}✓{RESET} Documenti processati : {report.documents} ({', '.join(report.files)})")
     print(f"{GREEN}✓{RESET} Chunk indicizzati    : {written} (size={settings.chunk_size}, overlap={settings.chunk_overlap})")
     print(f"{GREEN}✓{RESET} Entità PII rimosse   : {report.masked_entities} → {', '.join(report.entity_types)}")
+    print(f"{GREEN}✓{RESET} Livelli attivi       : {report.anonymization_levels}")
+    if motivo := ner_unavailable_reason(settings):
+        print(f"{DIM}  ↳ livello 2 richiesto ma non disponibile: {motivo}{RESET}")
     print(
         f"\n{DIM}Nel vector store non è finito alcun dato personale in chiaro: i segnaposto sono\n"
         f"stabili tra documenti (lo stesso IBAN resta [IBAN_001] ovunque) e la mappa di\n"

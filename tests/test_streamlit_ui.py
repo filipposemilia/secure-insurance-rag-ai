@@ -62,6 +62,19 @@ def test_l_app_si_avvia_senza_eccezioni(indexed_app):
     assert len(app.tabs) == 3
 
 
+def test_la_scheda_sicurezza_dichiara_i_livelli_di_anonimizzazione(indexed_app):
+    """Un anonimizzatore che non dice con quale motore ha lavorato non è verificabile.
+
+    Nei test il livello 2 è spento, quindi ciò che deve comparire è la dichiarazione del livello 1 —
+    non l'assenza di qualunque dichiarazione.
+    """
+    app = run_app()
+
+    testi = [markdown.value for markdown in app.markdown]
+    assert any("Livelli attivi su questa istanza" in testo for testo in testi)
+    assert any("1 (regex)" in testo for testo in testi)
+
+
 def test_lo_scenario_produce_l_esito_al_primo_click(indexed_app):
     """Regressione: il click rimandava la domanda al rerun successivo, che non arrivava mai.
 

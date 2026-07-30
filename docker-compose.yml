@@ -25,6 +25,12 @@ services:
       # Il pulsante di reindicizzazione non è coperto dai limiti di frequenza — quelli valgono
       # per le domande — e lasciato visibile permetterebbe di far ripagare gli embedding.
       PUBLIC_MODE: "true"
+      # Anonimizzazione a due livelli: regex (sempre) + NER italiano sui nomi in testo libero.
+      # Il modello è dentro l'immagine e aggiunge ~870 MB di RSS al processo, una volta sola e
+      # condivisi da tutte le sessioni. Impostare `false` per
+      # tornare alle sole regex: al riavvio l'indice viene rifatto, perché i segnaposto di un
+      # livello non sono quelli dell'altro (si veda `ingest_decision`).
+      PII_NER_ENABLED: ${PII_NER_ENABLED:-true}
       RATE_LIMIT_ENABLED: "true"
       RATE_LIMIT_PER_IP_HOUR: ${RATE_LIMIT_PER_IP_HOUR:-10}
       RATE_LIMIT_GLOBAL_DAY: ${RATE_LIMIT_GLOBAL_DAY:-300}

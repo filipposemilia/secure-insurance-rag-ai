@@ -14,9 +14,11 @@ persona sola.
 (Art. 10) — diagnosi, percentuali di invalidità, verbali — che **non hanno una forma riconoscibile**
 e nessuna regex potrà mai individuare. Servono NER o un classificatore addestrato.
 
-Scelta implementativa: regex deterministiche + dizionario di entità note. In produzione questo
-modulo va sostituito da Microsoft Presidio (NER + riconoscitori italiani), mantenendo la stessa
-firma `PIIMasker.mask(text) -> MaskingResult`: il resto della pipeline non cambia.
+Scelta implementativa: regex deterministiche + dizionario di entità note, con un **livello 2
+opzionale** (`security/ner.py`: Microsoft Presidio e un NER italiano) che si affianca alle regex per
+i nomi in testo libero. Le regex girano per prime e restano autoritative sui formati rigidi — sono
+ripetibili e coperte da test; il modello lavora su ciò che resta. Senza il livello 2 attivo il
+comportamento è identico a quello di sempre, ed è il default.
 
 I placeholder sono **stabili e numerati** (`[CF_001]`): la stessa entità riceve lo stesso segnaposto
 in tutti i documenti, così il modello può ancora ragionare su "la stessa persona" senza conoscerne
@@ -29,6 +31,9 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from typing import Iterable, Pattern
+
+from secure_rag.config import Settings, get_settings
+from secure_rag.security.ner import NerEngine, NerSpan, build_ner_engine, is_contract_term
 
 
 @dataclass(frozen=True)
@@ -125,12 +130,24 @@ class PIIMasker:
     referenziale tra chunk diversi.
     """
 
-    def __init__(self, extra_names: Iterable[str] | None = None) -> None:
+    def __init__(
+        self,
+        extra_names: Iterable[str] | None = None,
+        ner: NerEngine | None = None,
+        ner_threshold: float = 0.6,
+        ner_detect_threshold: float = 0.85,
+    ) -> None:
         self._vault: dict[str, str] = {}  # placeholder -> valore originale
         self._reverse: dict[str, str] = {}  # valore originale -> placeholder
         self._counters: dict[str, int] = {}
-        # Nomi noti da mascherare anche quando compaiono senza ruolo contrattuale davanti.
+        # Nomi noti da mascherare anche quando compaiono senza ruolo contrattuale davanti. È il
+        # ripiego di quando il livello 2 non è disponibile: un elenco compilato a mano.
         self._extra_names = sorted(set(extra_names or []), key=len, reverse=True)
+        # Livello 2 (`security/ner.py`), assente per default. Con `ner=None` questa classe si
+        # comporta esattamente come prima che il livello esistesse.
+        self._ner = ner
+        self._ner_threshold = ner_threshold
+        self._ner_detect_threshold = ner_detect_threshold
 
     # ------------------------------------------------------------------ API
 
@@ -150,13 +167,39 @@ class PIIMasker:
                 placeholder = self._placeholder_for(name, "NOME", entities)
                 masked = masked.replace(name, placeholder)
 
+        # Il livello 2 arriva per ultimo, sul testo già ripulito dalle regex: è l'ordine di
+        # precedenza di ADR-019. Dove un pattern deterministico ha già risposto, un modello
+        # probabilistico non deve poter rimettere in discussione l'esito.
+        masked = self._apply_ner(masked, entities)
+
         return MaskingResult(masked_text=masked, entities=entities)
+
+    @property
+    def ner_active(self) -> bool:
+        """True quando il livello 2 sta effettivamente lavorando, non solo quando è configurato."""
+        return self._ner is not None
+
+    @property
+    def active_levels(self) -> str:
+        """Livelli di anonimizzazione realmente attivi, da dichiarare a schermo.
+
+        Un anonimizzatore che non dice con quale motore ha lavorato non è verificabile: la stessa
+        frase produce risultati diversi a livello 1 e a livello 1+2.
+        """
+        if self._ner is None:
+            return "1 (regex)"
+        return f"1+2 (regex + NER {self._ner.model_name})"
 
     def detect(self, text: str) -> list[PIIEntity]:
         """Individua PII senza modificare il vault: usato dall'output guard.
 
         Serve a verificare che nella risposta generata dall'LLM non sia ricomparso un dato
         personale (per esempio perché il modello lo ha ricostruito o l'utente lo ha iniettato).
+
+        Il livello 2, quando attivo, gira anche qui — ma con una **soglia più severa** che in
+        ingresso. L'asimmetria è voluta: mascherare di troppo un documento costa un segnaposto,
+        mentre in uscita un falso positivo sopprime una risposta per cui i token sono già stati
+        spesi.
         """
         found: list[PIIEntity] = []
         cleaned = _PLACEHOLDER_RE.sub(" ", text)
@@ -164,6 +207,16 @@ class PIIMasker:
             for match in pattern.finditer(cleaned):
                 found.append(
                     PIIEntity(entity_type=entity_type, original=match.group(0), placeholder="")
+                )
+
+        if self._ner is not None:
+            for span in self._ner_spans(cleaned, self._ner_detect_threshold):
+                found.append(
+                    PIIEntity(
+                        entity_type=span.entity_type,
+                        original=cleaned[span.start : span.end],
+                        placeholder="",
+                    )
                 )
         return found
 
@@ -200,6 +253,65 @@ class PIIMasker:
 
     # -------------------------------------------------------------- interni
 
+    def _ner_spans(self, text: str, threshold: float) -> list[NerSpan]:
+        """Span del livello 2, già ripuliti dal lessico contrattuale.
+
+        Il filtro sta qui e non nel motore perché vale per **entrambi** i lati: se «Assicurato»
+        fosse trattato come un nome, non solo corromperebbe i documenti in ingresso, ma l'output
+        guard sopprimerebbe qualunque risposta che cita una clausola.
+        """
+        if self._ner is None:
+            return []
+        return [
+            span
+            for span in self._ner.analyze(text, threshold)
+            if not is_contract_term(text[span.start : span.end])
+        ]
+
+    def _apply_ner(self, text: str, entities: list[PIIEntity]) -> str:
+        """Sostituisce le entità individuate dal modello, se il livello 2 è attivo."""
+        if self._ner is None:
+            return text
+
+        spans = self._ner_spans(text, self._ner_threshold)
+        if not spans:
+            return text
+
+        # Intervalli già occupati da un segnaposto del livello 1: `[CF_001]` non deve diventare
+        # `[NOME_004]`, e un modello NER lo scambia volentieri per un codice.
+        protetti = [(trovato.start(), trovato.end()) for trovato in _PLACEHOLDER_RE.finditer(text)]
+
+        # Punteggio decrescente: fra due span sovrapposti vince quello in cui il modello crede di
+        # più, non quello che arriva prima nel testo.
+        scelti: list[NerSpan] = []
+        for span in sorted(spans, key=lambda voce: (-voce.score, voce.start)):
+            span_pulito = _restringi(span, text)
+            if span_pulito is None:
+                continue
+            if any(
+                span_pulito.start < fine and inizio < span_pulito.end
+                for inizio, fine in protetti
+            ):
+                continue
+            if any(
+                span_pulito.start < altro.end and altro.start < span_pulito.end for altro in scelti
+            ):
+                continue
+            scelti.append(span_pulito)
+
+        scelti.sort(key=lambda voce: voce.start)
+
+        # Le entità vengono registrate in ordine di lettura — `entity_types` promette «in ordine di
+        # apparizione» — ma la sostituzione avviene da destra a sinistra: rimpiazzare da sinistra
+        # invaliderebbe gli offset di tutti gli span successivi.
+        sostituzioni = [
+            (span, self._placeholder_for(text[span.start : span.end], span.entity_type, entities))
+            for span in scelti
+        ]
+        for span, placeholder in reversed(sostituzioni):
+            text = text[: span.start] + placeholder + text[span.end :]
+        return text
+
     def _substitute(self, value: str, entity_type: str, entities: list[PIIEntity]) -> str:
         if _PLACEHOLDER_RE.fullmatch(value):
             return value
@@ -218,6 +330,47 @@ class PIIMasker:
         return placeholder
 
 
+def _restringi(span: NerSpan, text: str) -> NerSpan | None:
+    """Toglie gli spazi ai bordi di uno span, o `None` se non resta nulla.
+
+    Un modello NER può includere uno spazio o un ritorno a capo nei propri confini: sostituirlo
+    insieme all'entità incollerebbe fra loro le parole vicine, e il testo che l'LLM deve
+    interpretare non va corrotto per un carattere.
+    """
+    valore = text[span.start : span.end]
+    ripulito = valore.strip()
+    if not ripulito:
+        return None
+    if valore == ripulito:
+        return span
+    inizio = span.start + (len(valore) - len(valore.lstrip()))
+    return NerSpan(
+        start=inizio,
+        end=inizio + len(ripulito),
+        entity_type=span.entity_type,
+        score=span.score,
+    )
+
+
+def build_masker(
+    settings: Settings | None = None,
+    extra_names: Iterable[str] | None = None,
+) -> PIIMasker:
+    """Il mascheratore configurato secondo le impostazioni: unico punto di costruzione.
+
+    Esiste perché il livello 2 va montato in modo identico in tutti i punti che anonimizzano —
+    ingestion, upload, contesto del prompt, output guard — e sette costruzioni indipendenti
+    finirebbero prima o poi per divergere.
+    """
+    settings = settings or get_settings()
+    return PIIMasker(
+        extra_names=extra_names,
+        ner=build_ner_engine(settings),
+        ner_threshold=settings.pii_ner_threshold,
+        ner_detect_threshold=settings.pii_ner_detect_threshold,
+    )
+
+
 def mask_pii_data(text: str) -> str:
-    """Scorciatoia senza stato: restituisce solo il testo anonimizzato."""
+    """Scorciatoia senza stato a sole regex: restituisce solo il testo anonimizzato."""
     return PIIMasker().mask(text).masked_text

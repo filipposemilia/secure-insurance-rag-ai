@@ -25,11 +25,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from secure_rag.cli import SCENARIOS  # noqa: E402
 from secure_rag.config import Settings, get_settings  # noqa: E402
-from secure_rag.ingestion import CLEARANCE_LEVELS, build_documents  # noqa: E402
+from secure_rag.ingestion import (  # noqa: E402
+    CLEARANCE_LEVELS,
+    build_documents,
+    write_index_stamp,
+)
 from secure_rag.providers import describe_provider, probe_providers  # noqa: E402
 from secure_rag.rag import RAGResponse, SecureRAGPipeline  # noqa: E402
 from secure_rag.security.audit import AuditRecord, hash_query, utc_now  # noqa: E402
-from secure_rag.security.pii import PIIMasker  # noqa: E402
+from secure_rag.security.ner import ner_unavailable_reason  # noqa: E402
+from secure_rag.security.pii import build_masker  # noqa: E402
 from secure_rag.security.ratelimit import RateLimiter, client_identity  # noqa: E402
 from secure_rag.uploads import SUPPORTED_SUFFIXES, UploadReport, process_upload  # noqa: E402
 from secure_rag.vectorstore import (  # noqa: E402
@@ -208,9 +213,10 @@ def upload_settings(settings: Settings) -> Settings:
 
 
 def run_ingestion(settings: Settings) -> dict:
-    masker = PIIMasker()
+    masker = build_masker(settings)
     documents, report = build_documents(settings, masker)
     index_documents(documents, settings)
+    write_index_stamp(settings, report.anonymization_levels)
     return {
         "documents": report.documents,
         "chunks": report.chunks,
@@ -663,6 +669,13 @@ def render_upload_report(report: UploadReport) -> None:
         if report.pii_types:
             st.caption("**Tipi rimossi:** " + ", ".join(report.pii_types))
 
+        if report.anonymization_levels:
+            st.caption(
+                f"**Livelli di anonimizzazione:** {report.anonymization_levels} — le regex vedono i "
+                "formati rigidi (codice fiscale, IBAN, targa); il livello 2, quando attivo, aggiunge "
+                "i nomi in testo libero."
+            )
+
         st.caption(
             f"Consultabile da chi ha il profilo **{ROLE_LABELS.get(report.clearance, report.clearance)}** "
             "o superiore, e solo all'interno di questa sessione."
@@ -743,7 +756,7 @@ with tab_docs:
         )
 
     if uploaded_files:
-        masker = PIIMasker()
+        masker = build_masker(settings)
         nuovi = 0
         for uploaded in uploaded_files:
             data = uploaded.getvalue()
@@ -847,6 +860,31 @@ with tab_security:
         st.caption(f"Atteso: {result['expected']}")
         st.code(result["question"], language=None)
         render_response(result["response"])
+
+    st.divider()
+    st.subheader("Anonimizzazione in esercizio")
+    masker_attivo = build_masker(settings)
+    st.markdown(
+        f"Livelli attivi su questa istanza: **{masker_attivo.active_levels}**."
+    )
+    if masker_attivo.ner_active:
+        st.caption(
+            "Il livello 2 riconosce i nomi in **testo libero** — «il testimone Andrea Gallo ha "
+            "dichiarato» — che nessuna espressione regolare può vedere, perché non c'è alcun "
+            "formato da riconoscere. È un modello, quindi assegna una confidenza: la soglia in "
+            "uscita è più severa di quella in ingresso."
+        )
+    else:
+        st.caption(
+            "Solo espressioni regolari: coprono ciò che ha una forma riconoscibile — codice "
+            "fiscale, IBAN, numero di polizza, targa, telaio — e i nomi introdotti da un ruolo "
+            "contrattuale. Restano fuori i nomi in testo libero e, per costruzione, i dati "
+            "sanitari e giudiziari. Il livello 2 (NER) esiste nel codice ed è attivo "
+            "sull'istanza pubblica: qui è spento perché in un'installazione da sorgente resta "
+            "opzionale (`PII_NER_ENABLED`), per non aggiungere 540 MB di modello linguistico."
+        )
+        if motivo := ner_unavailable_reason(settings):
+            st.warning(f"Il livello 2 è configurato ma non sta lavorando: {motivo}", icon="⚠️")
 
     st.divider()
     st.subheader("Registro delle interazioni")

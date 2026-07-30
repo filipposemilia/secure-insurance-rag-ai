@@ -30,6 +30,7 @@ audit trail ricostruibile.
 | | Capacità | Dove guardarla |
 | :--- | :--- | :--- |
 | 🔒 | **PII masking prima dell'embedding**: nel vector store non esiste un CF o un IBAN in chiaro. Copre anche gli identificativi *indiretti* dell'elenco GDPR — numero di polizza, sinistro, targa, telaio — con segnaposto stabili fra documenti (`[IBAN_001]`). | `secure-rag ingest` |
+| 🧠 | **Anonimizzazione a due livelli**: regex deterministiche sui formati rigidi, e **Microsoft Presidio** con un NER italiano sui nomi in *testo libero* — «il testimone Andrea Gallo ha dichiarato», che nessun pattern può vedere. Attivi entrambi sull'istanza pubblica; il secondo è opzionale nell'installazione da sorgente. | `security/ner.py` |
 | 🚫 | **Prompt injection diretta** bloccata prima della chiamata al modello: 0 ms, 0 token. | scenario 2 |
 | 🧨 | **Prompt injection indiretta** nascosta in un commento HTML dentro una perizia: il chunk finisce in quarantena e l'evento viene segnalato. | scenario 3 |
 | 👤 | **RBAC sui vettori**: la stessa domanda dà risultati diversi per un agente di rete e per la direzione. | scenari 5 e 6 |
@@ -94,7 +95,7 @@ dimensione diversa: 1536 per `text-embedding-3-small`, 256 per quello determinis
 provider nuovo va eseguito `ingest` una volta per quel provider; gli indici già costruiti restano
 validi e si può alternare senza re-indicizzare.
 
-Demo guidata: `bash scripts/demo.sh openai` (o `fake`). Test: `.venv/bin/pytest -q` — 107 test, tutti
+Demo guidata: `bash scripts/demo.sh openai` (o `fake`). Test: `.venv/bin/pytest -q` — 132 test, tutti
 offline, nessuna API key richiesta.
 
 ## Architettura
@@ -135,13 +136,35 @@ un'architettura enterprise: **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**.
 | LLM01 — Prompt Injection diretta | Input guard a pattern, blocco pre-modello | `security/guardrails.py` |
 | LLM01 — Prompt Injection indiretta | Scansione dei chunk recuperati + delimitatori rigidi nel prompt | `security/guardrails.py`, `rag.py` |
 | LLM04 — Denial of Service | Limite di lunghezza query, `k` di retrieval fisso | `security/guardrails.py` |
-| LLM06 — Sensitive Information Disclosure | Masking pre-embedding, RBAC sul retrieval, output guard, audit senza query in chiaro | `security/pii.py`, `vectorstore.py`, `security/audit.py` |
+| LLM06 — Sensitive Information Disclosure | Masking pre-embedding a due livelli (regex + NER opzionale), RBAC sul retrieval, output guard, audit senza query in chiaro | `security/pii.py`, `security/ner.py`, `vectorstore.py`, `security/audit.py` |
 | LLM08 — Excessive Agency | Sistema read-only: il modello non compie azioni | architettura |
 | LLM09 — Overreliance | `temperature=0`, obbligo di citazione, formula di non-risposta, controllo di groundedness | `rag.py`, `security/guardrails.py` |
 
-I limiti sono dichiarati esplicitamente — guardrail a regole eludibili con riformulazioni, PII a
-regex che non copre i nomi in contesto libero, nessuna autenticazione reale, groundedness misurata
-in modo lessicale: **[docs/SECURITY.md](docs/SECURITY.md)**.
+I limiti sono dichiarati esplicitamente — guardrail a regole eludibili con riformulazioni, dati
+sanitari e giudiziari che nessuno dei due livelli di anonimizzazione può vedere, nessuna
+autenticazione reale, groundedness misurata in modo lessicale:
+**[docs/SECURITY.md](docs/SECURITY.md)**.
+
+### Attivare il livello 2 in locale
+
+Sull'istanza pubblica è già attivo: il modello è nell'immagine Docker. In un'installazione da
+sorgente è spento, perché 540 MB romperebbero la promessa di una demo installabile in un minuto:
+
+```bash
+uv pip install -e ".[presidio]"
+.venv/bin/python -m spacy download it_core_news_lg   # ~540 MB, ~870 MB di RAM a regime
+PII_NER_ENABLED=true .venv/bin/secure-rag ingest
+```
+
+Senza la libreria o senza il modello il sistema torna alle sole regex **dicendolo** — nella riga di
+esito dell'ingest e nella scheda 🛡️ Sicurezza — invece di far credere di aver mascherato di più. E
+il modello non viene **mai** scaricato da solo: un flag di configurazione non deve poter innescare un
+download da centinaia di MB.
+
+Cambiare il flag comporta un nuovo `ingest`, e il sistema **se ne accorge da sé**: l'indice porta una
+marca con i livelli usati per costruirlo, e all'avvio viene rifatto se non coincidono con quelli
+configurati. Un indice con segnaposto di livello 1 mentre l'interfaccia dichiara il livello 2 sarebbe
+un'incoerenza silenziosa fra ciò che il sistema afferma e ciò che il retrieval contiene.
 
 ## Struttura
 
@@ -155,7 +178,8 @@ src/secure_rag/
 ├── rag.py                 pipeline con i sette passi di controllo
 ├── cli.py                 ingest · ask · attack-demo · audit
 └── security/
-    ├── pii.py             masking con segnaposto stabili, categorie dell'elenco GDPR
+    ├── pii.py             livello 1: masking a regex, segnaposto stabili, categorie GDPR
+    ├── ner.py             livello 2: Presidio + NER italiano, opzionale con fallback
     ├── vault.py           mappa segnaposto → valore reale, cifrata e opzionale
     ├── guardrails.py      input guard · context guard · output guard
     ├── ratelimit.py       quota per visitatore e tetto di spesa (istanza pubblica)
@@ -163,7 +187,7 @@ src/secure_rag/
 
 app/streamlit_app.py       UI demo a schede: chat, upload documenti, sicurezza
 data/policies/             4 documenti sintetici, uno deliberatamente compromesso
-tests/                     107 test, nessuna chiamata di rete
+tests/                     132 test, nessuna chiamata di rete
 ```
 
 ## Deploy
@@ -193,3 +217,4 @@ Procedura completa, configurazione del proxy e problemi frequenti: **[docs/DEPLO
 ## Stack
 
 Python 3.12 · LangChain (LCEL) · ChromaDB · Streamlit · pydantic-settings · pytest · uv · Docker
+Opzionali: Microsoft Presidio + spaCy (anonimizzazione livello 2) · cryptography (vault)

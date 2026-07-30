@@ -398,9 +398,72 @@ qualunque altro componente, quindi log delle richieste disattivati e nessuna per
 contesto. È un punto che sfugge facilmente, perché lo si pensa come "il componente che protegge" e
 non come "un componente che vede tutto".
 
-Il costo è in risorse: un modello da 8 miliardi di parametri quantizzato richiede circa 5 GB di RAM,
-Presidio con il modello linguistico grande circa 1 GB. **Sull'attuale VPS non c'è margine** (si veda
-`ROADMAP.md`), per questo il progetto usa oggi un modello esterno per la generazione e non ha ancora
-i livelli 2 e 3. L'architettura a container è però ciò che permette di aggiungerli in seguito, anche
-su una macchina diversa, senza riscrivere l'applicazione: `providers.py` astrae già il fornitore, e
-`PIIMasker` la firma del mascheratore.
+Il costo è in risorse, e i due livelli mancanti non costavano lo stesso: Presidio con il modello
+linguistico grande occupa ~870 MB di RSS (misurati), un modello da 8 miliardi di parametri
+quantizzato ne vuole circa 5 GB. Sui 12 GB del VPS il **livello 2 sta comodamente**, ed è stato
+attivato (ADR-020); il **livello 3 resta future work**, perché a quel punto la generazione andrebbe
+spostata su hardware con GPU o molta più RAM.
+
+L'architettura a container è ciò che permette di aggiungerlo in seguito, anche su una macchina
+diversa, senza riscrivere l'applicazione: `providers.py` astrae già il fornitore, e `PIIMasker` la
+firma del mascheratore — il livello 2 si è agganciato lì senza toccare la pipeline.
+
+---
+
+## ADR-020 — Presidio affiancato alle regex, opzionale e senza degradazione silenziosa
+
+**Contesto.** ADR-019 stabilisce *cosa* deve fare il livello 2; qui si decide *come* installarlo in
+un progetto che deve continuare a girare offline. Tre vincoli in tensione: la lacuna è reale (nessuna
+regex vede «il testimone Andrea Gallo ha dichiarato»), Presidio porta spaCy e un modello da ~540 MB,
+e la demo deve restare installabile in un minuto.
+
+**Decisione.**
+
+1. **Affiancato, non sostitutivo, con precedenza al livello 1.** Le regex girano per prime e restano
+   autoritative sui formati rigidi; il NER lavora sul testo già mascherato. Dove un pattern
+   deterministico ha risposto, un modello probabilistico non rimette in discussione l'esito.
+2. **Dipendenza opzionale, spenta per default** (`PII_NER_ENABLED=false`). Un protocollo di due
+   proprietà e un metodo (`NerEngine` in `security/ner.py`) separa il masker dal motore: è ciò che
+   permette di provare tutta la logica di integrazione con un doppio, senza installare nulla.
+3. **Nessuna degradazione silenziosa.** Se il livello 2 è configurato ma non disponibile, il motivo
+   viene dichiarato dove lo si cerca — riga di esito della CLI, scheda 🛡️ Sicurezza — oltre che nei
+   log. Un livello di sicurezza spento senza che nessuno lo sappia è peggio di un livello assente.
+4. **Nessun download implicito.** Presidio, davanti a un modello mancante, prova a scaricarlo e
+   spaCy chiude il processo con `SystemExit`. Il modello viene quindi verificato *prima*
+   (`modello_installato()`): un flag di configurazione non deve poter aprire una connessione da
+   centinaia di MB né far cadere l'applicazione.
+5. **Elenco esplicito di lessico contrattuale escluso dal riconoscimento.** Scoperta dal confronto
+   sul corpus reale: il modello mascherava `## SEZIONE 1` e `l'Assicurato`, corrompendo il testo che
+   l'LLM deve interpretare. Il punteggio di confidenza **non aiuta** — spaCy assegna `0,85` a ogni
+   `PERSON`, nome vero o intestazione — quindi la soglia non può essere la difesa. Il filtro vale su
+   entrambi i lati: senza, l'output guard sopprimerebbe ogni risposta che cita una clausola.
+6. **Due soglie, in ingresso e in uscita.** In ingresso mascherare di troppo costa un segnaposto; in
+   uscita un falso positivo sopprime una risposta già pagata in token. Con `it_core_news_lg` i
+   punteggi sono costanti e il meccanismo è latente: diventa effettivo con un modello che produca
+   confidenze graduate.
+
+**Alternative scartate.** *Sostituire le regex con Presidio*: si perderebbero determinismo,
+ripetibilità e i test che coprono i formati italiani, in cambio di un rilevatore che sugli stessi
+formati non è migliore. *`PresidioReversibleAnonymizer` di `langchain-experimental`*: repository
+archiviato il 26/05/2026 e non manutenuto. *Presidio come microservizio Docker* (immagini ufficiali
+esistono): è la strada di ADR-019, ma aggiunge un container che il VPS attuale non ospita.
+*Alzare la soglia di confidenza* per contenere i falsi positivi: inefficace, perché il punteggio è
+costante.
+
+**Conseguenze.** La copertura sui nomi in testo libero passa da «solo dopo un ruolo contrattuale» a
+«anche in mezzo a una frase», al costo di ~50-80 ms per documento contro ~1 ms (misurato su
+`data/policies/`). In cambio entrano due oneri nuovi: l'elenco del lessico contrattuale va mantenuto
+quando cambia il vocabolario dei documenti, e **un mancato riconoscimento non produce alcun segnale**
+— un rilevatore probabilistico aumenta la copertura, non la garanzia.
+
+**Sull'istanza pubblica il livello 2 è attivo**: il modello è nell'immagine Docker con la versione
+fissata, e `PII_NER_ENABLED` vale `true` nel compose. Nell'installazione da sorgente resta spento,
+perché lì il vincolo non è la RAM ma il tempo di installazione.
+
+Vincolo operativo che ne deriva: **cambiare `PII_NER_ENABLED` impone un nuovo `ingest`**, perché il
+corpus indicizzato porta i segnaposto del livello attivo al momento dell'indicizzazione. Lasciarlo
+come avvertenza nella documentazione non bastava — su un volume persistente l'ingestion viene
+saltata, quindi un indice di livello 1 sarebbe sopravvissuto sotto un'interfaccia che dichiara il
+livello 2. L'indice porta perciò una **marca** con i livelli usati per costruirlo
+(`.anonymization`), e `ingest_decision()` reindicizza quando non coincide con la configurazione, o
+quando manca: un indice di provenienza ignota non permette di affermare nulla sui propri segnaposto.

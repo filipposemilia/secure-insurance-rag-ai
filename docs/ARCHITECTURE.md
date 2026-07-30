@@ -3,9 +3,12 @@
 > **Cosa gira oggi in produzione.** La generazione usa **OpenAI `gpt-4o-mini`**, un modello esterno.
 > Il percorso on-premise è implementato in `providers.py` (Ollama, Azure OpenAI) ma non è attivo: la
 > VPS che ospita l'istanza pubblica non ha risorse per un modello locale. L'**anonimizzazione**, che
-> è la parte che tratta dati in chiaro, gira invece **interamente in locale** con regex
-> deterministiche — non esce dal perimetro nemmeno oggi. Si veda ADR-019 per l'architettura a tre
-> livelli verso cui questo evolve.
+> è la parte che tratta dati in chiaro, gira invece **interamente in locale** — non esce dal perimetro
+> nemmeno oggi. Ha due livelli: regex deterministiche (sempre attive) e NER con Microsoft Presidio
+> (`security/ner.py`). **Sull'istanza pubblica sono attivi entrambi**: il modello è nell'immagine e
+> aggiunge ~870 MB di RSS al processo. Nell'installazione da sorgente il livello 2 è opzionale e
+> spento. Si veda ADR-019 per l'architettura a tre livelli e ADR-020 per come il livello 2 è
+> installato.
 
 ## Due percorsi di indicizzazione
 
@@ -15,14 +18,14 @@ finiscono in **collection separate**.
 ```mermaid
 flowchart LR
     subgraph CORPUS["Corpus aziendale · ingestion.py"]
-        A["PDF · MD · TXT"] --> B["Anonimizza<br/>pii.py"]
+        A["PDF · MD · TXT"] --> B["Anonimizza<br/>2 livelli"]
         B --> C["Chunking<br/>+ clearance"]
     end
 
     subgraph UP["Caricati in sessione · uploads.py"]
         D["File caricato"] --> E{"Limiti<br/>d'ingresso"}
         E -->|oltre soglia| F["Rifiutato"]
-        E -->|accettato| G["Anonimizza<br/>pii.py"]
+        E -->|accettato| G["Anonimizza<br/>2 livelli"]
         G --> H["Referto<br/>sicurezza"]
     end
 
@@ -37,6 +40,13 @@ flowchart LR
 **L'anonimizzazione precede l'embedding, sempre.** Nel vector store non esiste un codice fiscale in
 chiaro: se l'indice venisse esfiltrato, conterrebbe segnaposto. È il motivo per cui l'ordine dei passi
 non è negoziabile.
+
+**I due livelli dell'anonimizzazione.** Il livello 1 (`security/pii.py`) è a regex: vede ciò che ha
+una forma — codice fiscale, IBAN, numero di polizza, targa, telaio — ed è sempre attivo. Il livello 2
+(`security/ner.py`) è Microsoft Presidio con un NER italiano: vede i **nomi in testo libero**, che
+nessun pattern può riconoscere. È opzionale, spento per default, e si costruisce solo attraverso
+`build_masker(settings)`. L'ordine non è invertibile: dove il livello 1 ha già risposto in modo
+deterministico, il livello 2 non interviene (ADR-020).
 
 **Perché gli upload stanno in una collection per sessione.** Tenerli fuori dalla collection
 principale evita che contaminino il corpus aziendale; separarli **anche per sessione** evita che il
@@ -94,7 +104,7 @@ una difesa che fa risparmiare e una che fa solo evitare il danno.
 | 1 | Input guard | `security/guardrails.py` | Prompt injection diretta, jailbreak, esfiltrazione. Blocca **prima** della chiamata al modello: una richiesta malevola non costa token. |
 | 2 | Retrieval con RBAC | `vectorstore.py` | Accesso a documenti fuori dal livello di clearance. Il filtro è nella query al vector store, non a valle. |
 | 3 | Context guard | `security/guardrails.py` | Prompt injection **indiretta**: istruzioni nascoste nei documenti indicizzati o caricati. |
-| 4 | PII guard sul contesto | `security/pii.py` | Rete di sicurezza sui chunk, **e mascheramento dei metadati**: il numero di polizza vive lì e non passa dall'anonimizzazione dell'ingestion. |
+| 4 | PII guard sul contesto | `security/pii.py`, `security/ner.py` | Rete di sicurezza sui chunk, **e mascheramento dei metadati**: il numero di polizza vive lì e non passa dall'anonimizzazione dell'ingestion. |
 | 5 | Catena LCEL | `rag.py` | Allucinazioni: delimitatori rigidi, obbligo di citare la fonte, `temperature=0`. |
 | 6 | Output guard | `security/guardrails.py` | Fuga di dati personali in risposta e risposte non ancorate al contesto. |
 | 6b | Ripristino | `rag.py`, `security/vault.py` | Nulla: è un passo di usabilità, non di sicurezza. Attivo solo con vault configurato e per i ruoli in `UNMASK_ROLES`. |
@@ -133,6 +143,39 @@ un attacco riuscito sul modello.
 
 Il filtro si applica **a entrambe le collection**: un file caricato da un utente `management` non
 diventa visibile a un `agent` che interroga la stessa sessione.
+
+## Anonimizzazione a livelli
+
+| Livello | Motore | Vede | Costo misurato su `data/policies/` |
+| :--- | :--- | :--- | :--- |
+| 1 | Regex (`security/pii.py`) | Formati rigidi e nomi dopo un ruolo contrattuale | ~1 ms per documento |
+| 2 | Presidio + `it_core_news_lg` (`security/ner.py`) | Nomi di persona in testo libero | ~50-80 ms per documento |
+| 3 | LLM locale | Dati sanitari, giudiziari, narrativa identificante | **non implementato** (ADR-019) |
+
+Il livello 2 è **attivo sull'istanza pubblica** (il modello sta nell'immagine, `PII_NER_ENABLED=true`
+nel compose) e **spento per default nell'installazione da sorgente**: attivarlo richiede
+`uv pip install -e ".[presidio]"` e `python -m spacy download it_core_news_lg`, cioè ~540 MB che
+romperebbero la promessa di una demo installabile in un minuto.
+
+**Coerenza fra indice e livello.** L'indice porta una marca (`.anonymization` nella sua directory)
+con i livelli usati per costruirlo. All'avvio del container `ingest_decision()` la confronta con la
+configurazione attiva e reindicizza se non coincidono — o se la marca manca, perché un indice di
+provenienza ignota non permette di affermare nulla sui propri segnaposto. Senza questo controllo, il
+volume persistente conserverebbe un indice di livello 1 mentre l'interfaccia dichiara il livello 2.
+
+Tre proprietà che ne definiscono il comportamento e che vale la pena conoscere prima di abilitarlo:
+
+- **Il livello 1 ha la precedenza.** Il NER gira sul testo già mascherato dalle regex: dove un
+  pattern deterministico ha risposto, un modello probabilistico non rimette in discussione l'esito.
+- **Il punteggio di confidenza non discrimina.** spaCy assegna `0,85` a ogni entità `PERSON`, sia
+  «Alessandro Nardi» sia l'intestazione «SEZIONE». La difesa contro i falsi positivi è un elenco
+  esplicito di lessico contrattuale escluso dal riconoscimento, non una soglia.
+- **Quando non è disponibile, lo dice.** Se il flag è attivo ma libreria o modello mancano, il motivo
+  compare nella riga di esito di `secure-rag ingest` e nella scheda 🛡️ Sicurezza. Il modello non
+  viene mai scaricato automaticamente: sarebbe una connessione da centinaia di MB innescata da una
+  variabile d'ambiente.
+
+Dettaglio delle scelte e delle alternative scartate: ADR-020.
 
 ## Pseudonimizzazione e vault
 
@@ -192,8 +235,7 @@ comandi che costano soldi a chi pubblica l'istanza (ADR-016).
 
 | Componente PoC | Sostituto in produzione | Aggancio |
 | :--- | :--- | :--- |
-| Regex PII | **Microsoft Presidio** *affiancato*, non sostitutivo: NER sui nomi in testo libero, regex sui formati rigidi (ADR-019) | Stessa firma `PIIMasker.mask(text) -> MaskingResult` |
-| Categorie senza forma riconoscibile (dati sanitari, giudiziari) | **LLM locale** come terzo livello, sui soli segmenti che i primi due non risolvono | Terzo livello di ADR-019 |
+| Categorie senza forma riconoscibile (dati sanitari, giudiziari) | **LLM locale** come terzo livello, sui soli segmenti che i primi due non risolvono. I livelli 1 e 2 sono già in esercizio | Protocollo `NerEngine` in `security/ner.py`: un terzo motore si aggancia lì |
 | Servizio unico | **Container separati** — applicazione, anonimizzazione, vector store, inferenza — con quello di inferenza *senza accesso a internet* | ADR-019; `docker-compose.yml` |
 | Guardrails a regole | **NeMo Guardrails** / **Guardrails AI** + classificatore di injection | Stesse firme `validate_input` / `scan_context` / `validate_output` |
 | ChromaDB locale | **Qdrant**, **pgvector**, Azure AI Search | Solo `vectorstore.py`: il resto usa l'interfaccia `VectorStoreRetriever` |

@@ -23,7 +23,7 @@ from typing import Iterable
 
 from langchain_core.documents import Document
 
-from secure_rag.security.pii import PIIMasker
+from secure_rag.security.pii import PIIMasker, build_masker
 
 # ---------------------------------------------------------------------------
 # Verdetti
@@ -207,7 +207,9 @@ _REFUSAL_MARKERS = ("informazione non presente", "non è presente nella document
 
 def validate_output(answer: str, context_used: str = "", masker: PIIMasker | None = None) -> GuardVerdict:
     """Controlla la risposta generata prima di mostrarla all'utente."""
-    masker = masker or PIIMasker()
+    # La pipeline passa il proprio masker, che condivide il vault e il livello di anonimizzazione
+    # attivo. Il ripiego serve a chi chiama il guard da solo.
+    masker = masker or build_masker()
 
     leaked = masker.detect(answer)
     if leaked:

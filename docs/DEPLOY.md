@@ -58,6 +58,11 @@ motore deterministico offline invece di rifiutare le richieste. Con `gpt-4o-mini
 chunk, 300 richieste sono nell'ordine di poche decine di centesimi al giorno; regolalo sul budget che
 sei disposto a lasciare scoperto.
 
+`PII_NER_ENABLED` **non va impostato**: il compose lo porta a `true` da sé, perché il livello 2
+dell'anonimizzazione fa parte di ciò che l'istanza pubblica dimostra. Metterlo a `false` in `.env` lo
+disattiva e provoca una reindicizzazione al riavvio successivo (i segnaposto di un livello non sono
+quelli dell'altro).
+
 ## 3. Avvio
 
 ```bash
@@ -65,8 +70,32 @@ docker compose up -d --build
 docker compose logs -f          # al primo avvio: ingestion con anonimizzazione, poi Streamlit
 ```
 
-Il primo avvio indicizza il corpus (14 chunk, ~17 entità PII rimosse) e paga gli embedding una volta
+Il primo avvio indicizza il corpus (14 chunk, ~22 entità PII rimosse) e paga gli embedding una volta
 sola: l'indice sta su un volume, quindi i riavvii successivi lo saltano.
+
+**Cosa cambia con il livello 2 dell'anonimizzazione attivo.** L'immagine contiene Presidio e il
+modello `it_core_news_lg`, e questo ha tre effetti da conoscere prima di lanciare la build:
+
+| | Effetto |
+| :--- | :--- |
+| Immagine | **+~700 MB** (di cui 541 il solo modello). La prima build scarica il wheel del modello: serve rete sulla VPS e qualche minuto in più |
+| RAM a regime | **+~870 MB di RSS** sul processo, caricati una volta sola e condivisi da tutte le sessioni: non è un costo per visitatore. Su una VPS da 12 GB il margine resta ampio |
+| Primo avvio | Il caricamento del modello aggiunge ~3 s prima dell'ingestion. `start_period` dell'healthcheck è 90 s, quindi non serve toccarlo |
+
+**Reindicizzazione automatica al cambio di livello.** L'indice porta una marca (`.anonymization`) con
+i livelli usati per costruirlo. All'avvio il container la confronta con la configurazione attiva e
+reindicizza se non coincidono, o se manca — è il caso di un volume creato da una versione precedente.
+Nei log lo vedi così:
+
+```
+→ Eseguo l'ingestion con anonimizzazione dei dati personali: livelli cambiati: indice «1 (regex)», configurazione «1+2 (regex + NER it_core_news_lg)».
+✓ Livelli attivi       : 1+2 (regex + NER it_core_news_lg)
+```
+
+Senza questo controllo un volume esistente conserverebbe l'indice di livello 1 mentre l'interfaccia
+dichiara il livello 2: l'indice non avrebbe i segnaposto che il sistema afferma di avere prodotto.
+**Aggiornando un'istanza già in esercizio, quindi, aspettati una reindicizzazione al primo avvio** —
+14 chunk di embedding, frazioni di centesimo.
 
 Verifica locale prima di esporre:
 
@@ -149,7 +178,9 @@ docker compose up -d --build
 | `Cartella documenti non trovata: /opt/venv/...` | Percorsi non dichiarati | Nell'immagine il pacchetto è installato in `site-packages`, quindi la root dedotta dal modulo cade dentro il venv. Il Dockerfile dichiara `POLICIES_DIR`, `CHROMA_BASE_DIR` e `AUDIT_LOG_PATH`: verifica di non averli sovrascritti con valori errati |
 | Il container riparte in ciclo | Ingestion fallita | `docker compose logs`: quasi sempre `OPENAI_API_KEY` mancante o senza credito |
 | Nei log compare `Provider attivo: fake` | `.env` copiato da `.env.example` | L'esempio contiene `LLM_PROVIDER=fake`: va cambiato in `openai`, altrimenti l'istanza risponde offline |
-| Ingestion a ogni riavvio | Volume non montato | Verificare `chroma-index` in `docker volume ls` |
+| Ingestion a ogni riavvio | Volume non montato | Verificare `chroma-index` in `docker volume ls`. Se il volume c'è, leggere il motivo nei log: `livelli cambiati` o `provenienza ignota` indicano un cambio di configurazione, non un volume perduto |
+| Build interrotta su `it_core_news_lg` | Wheel del modello non raggiungibile | Il Dockerfile lo scarica dalle release di spaCy su GitHub: serve rete in fase di build. Per una build senza rete, pre-scaricare il wheel e installarlo da file |
+| Nei log `NER level 2 requested but ... not installed` | Immagine costruita senza l'extra | Ricostruire con `--build`: l'installazione di `.[presidio]` sta nel primo stadio del Dockerfile. L'istanza continua a funzionare a sole regex e lo dichiara in pagina |
 | Emissione del certificato fallita | DNS non propagato | `dig +short insurag.aicorelabs.io` e riprovare |
 
 ## Limiti dichiarati di questo deployment

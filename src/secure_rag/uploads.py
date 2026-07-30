@@ -27,7 +27,7 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from secure_rag.config import Settings, get_settings
 from secure_rag.ingestion import CLEARANCE_LEVELS
 from secure_rag.security.guardrails import scan_context
-from secure_rag.security.pii import PIIMasker
+from secure_rag.security.pii import PIIMasker, build_masker
 
 SUPPORTED_SUFFIXES = (".pdf", ".txt", ".md")
 PREVIEW_CHARS = 600
@@ -50,6 +50,8 @@ class UploadReport:
     preview_masked: str = ""
     clearance: str = "agent"
     uploaded_at: str = ""
+    # Livelli di anonimizzazione applicati a questo file: fa parte del referto quanto il conteggio.
+    anonymization_levels: str = ""
 
     @property
     def is_clean(self) -> bool:
@@ -93,12 +95,13 @@ def process_upload(
     scrive nulla sul vector store: l'indicizzazione è un passo separato e volontario.
     """
     settings = settings or get_settings()
-    masker = masker or PIIMasker()
+    masker = masker or build_masker(settings)
     report = UploadReport(
         file_name=file_name,
         size_kb=round(len(data) / 1024, 1),
         clearance=clearance if clearance in CLEARANCE_LEVELS else "agent",
         uploaded_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        anonymization_levels=masker.active_levels,
     )
 
     # --- Controlli di ingresso -------------------------------------------------

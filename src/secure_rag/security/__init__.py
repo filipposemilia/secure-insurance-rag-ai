@@ -8,7 +8,14 @@ from secure_rag.security.guardrails import (
     validate_input,
     validate_output,
 )
-from secure_rag.security.pii import MaskingResult, PIIEntity, PIIMasker, mask_pii_data
+from secure_rag.security.ner import NerEngine, NerSpan, build_ner_engine
+from secure_rag.security.pii import (
+    MaskingResult,
+    PIIEntity,
+    PIIMasker,
+    build_masker,
+    mask_pii_data,
+)
 
 __all__ = [
     "AuditLogger",
@@ -16,8 +23,12 @@ __all__ = [
     "ContextScanResult",
     "GuardVerdict",
     "MaskingResult",
+    "NerEngine",
+    "NerSpan",
     "PIIEntity",
     "PIIMasker",
+    "build_masker",
+    "build_ner_engine",
     "mask_pii_data",
     "scan_context",
     "validate_input",

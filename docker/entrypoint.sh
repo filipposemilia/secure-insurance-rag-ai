@@ -27,28 +27,37 @@ if [ "${PROVIDER}" = "fake" ]; then
   echo "  LLM_PROVIDER=openai e OPENAI_API_KEY nel file .env."
 fi
 
-# Verifica l'indice senza toccarlo. Si tiene solo l'ultima riga e la si valida: eventuali
-# messaggi delle librerie su stdout non devono trasformarsi in un confronto numerico fallito,
-# che bloccherebbe l'avvio in produzione.
-CHUNKS=$(python - 2>/dev/null <<'PY' | tail -n 1
+# Verifica l'indice senza toccarlo. Non è solo un conteggio: un indice popolato può essere stato
+# costruito con un livello di anonimizzazione diverso da quello configurato ora, e in quel caso va
+# rifatto — altrimenti l'interfaccia dichiarerebbe un livello che i segnaposto nell'indice non hanno.
+# Si tiene solo l'ultima riga: eventuali messaggi delle librerie su stdout non devono confondere il
+# parsing e bloccare l'avvio in produzione.
+DECISIONE=$(python - 2>/dev/null <<'PY' | tail -n 1
 from secure_rag.config import get_settings
-from secure_rag.vectorstore import collection_size
+from secure_rag.ingestion import ingest_decision
 
 try:
-    print(collection_size(get_settings()))
-except Exception:
-    print(0)
+    serve, motivo = ingest_decision(get_settings())
+except Exception as errore:
+    serve, motivo = True, f"verifica non riuscita ({type(errore).__name__})"
+print(f"{'SI' if serve else 'NO'}|{motivo}")
 PY
 )
 
-case "${CHUNKS}" in
-  ''|*[!0-9]*) CHUNKS=0 ;;
+# Output vuoto o illeggibile: si indicizza. Un indice ricostruito senza bisogno costa embedding,
+# uno mancante o incoerente costa la correttezza.
+case "${DECISIONE}" in
+  SI\|*|NO\|*) ;;
+  *) DECISIONE="SI|verifica non riuscita" ;;
 esac
 
-if [ "${CHUNKS}" -gt 0 ]; then
-  echo "→ Indice già presente: ${CHUNKS} chunk. Ingestion saltata."
+SERVE="${DECISIONE%%|*}"
+MOTIVO="${DECISIONE#*|}"
+
+if [ "${SERVE}" = "NO" ]; then
+  echo "→ Ingestion saltata: ${MOTIVO}."
 else
-  echo "→ Indice assente: eseguo l'ingestion con anonimizzazione dei dati personali."
+  echo "→ Eseguo l'ingestion con anonimizzazione dei dati personali: ${MOTIVO}."
   # `--no-prompt` è obbligatorio: senza, il menu di scelta del provider resterebbe in attesa di
   # input su uno standard input che nel container non esiste, e l'avvio non terminerebbe mai.
   secure-rag ingest --provider "${PROVIDER}" --no-prompt

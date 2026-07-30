@@ -128,6 +128,27 @@ class Settings(BaseSettings):
     # Ruoli autorizzati a vedere i dati reali al posto dei segnaposto.
     unmask_roles: str = "management"
 
+    # --- Livello 2 dell'anonimizzazione: NER su testo libero (ADR-019, ADR-020) ---
+    # Spento per default: Presidio porta spaCy e un modello linguistico da ~540 MB, e la demo
+    # offline deve restare installabile in un minuto. Con il flag attivo ma la libreria assente il
+    # sistema torna alle sole regex **dichiarandolo**, invece di far credere di aver mascherato di
+    # più. Attivazione: uv pip install -e ".[presidio]" && python -m spacy download it_core_news_lg
+    pii_ner_enabled: bool = False
+    pii_ner_model: str = "it_core_news_lg"
+    # Nomi delle entità nel vocabolario di Presidio. Solo `PERSON` per default: `LOCATION` e
+    # `ORGANIZATION` mascherano anche il foro competente e la ragione sociale nelle clausole, cioè
+    # testo contrattuale che il modello deve poter leggere.
+    pii_ner_entities: str = "PERSON"
+    # Due soglie, non una: in ingresso mascherare di troppo costa un segnaposto, in uscita un falso
+    # positivo sopprime una risposta già pagata in token.
+    pii_ner_threshold: float = 0.6
+    pii_ner_detect_threshold: float = 0.85
+
+    @property
+    def ner_entities(self) -> list[str]:
+        """Entità NER attive, dall'elenco separato da virgole."""
+        return [voce.strip().upper() for voce in self.pii_ner_entities.split(",") if voce.strip()]
+
     # --- Istanza pubblica ---
     # Distingue la vetrina raggiungibile da chiunque dall'uso locale. In pubblico spariscono i
     # controlli da amministratore: cambio del provider e reindicizzazione, che costa embedding e
