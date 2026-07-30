@@ -13,8 +13,8 @@
 | 5 | Istanza pubblica: limiti di frequenza (LLM04) con degradazione al motore offline, immagine Docker, deploy dietro reverse proxy con TLS | ✅ |
 | 6 | Anonimizzazione approfondita: identificativi indiretti dell'elenco GDPR, vault cifrato per la pseudonimizzazione reversibile, **livello 2 con Presidio + NER italiano** (opzionale, con fallback dichiarato) | ✅ |
 
-Test: 132, tutti offline (`.venv/bin/pytest -q`), inclusi quelli di regressione su interfaccia e
-limiti di frequenza. La suite gira identica con e senza Presidio installato: 132 test con, 129 più 3
+Test: 137, tutti offline (`.venv/bin/pytest -q`), inclusi quelli di regressione su interfaccia e
+limiti di frequenza. La suite gira identica con e senza Presidio installato: 137 verdi con, 134 più 3
 salti senza.
 
 **Cosa gira oggi in produzione.** La generazione usa **OpenAI `gpt-4o-mini`**, un modello esterno.

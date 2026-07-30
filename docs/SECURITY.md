@@ -81,7 +81,12 @@ Due proprietà di questo livello vanno dette per intero, perché sono ciò che l
 Quando il livello 2 è configurato ma non disponibile (libreria o modello assenti), il sistema torna
 alle sole regex **dichiarandolo** — nella riga di esito di `secure-rag ingest`, nella scheda
 🛡️ Sicurezza e in un warning sui log. Non esiste un percorso in cui il masking si riduca senza che
-qualcuno lo veda.
+qualcuno lo veda. Per la stessa ragione l'indice porta una marca con i livelli usati per costruirlo e
+viene rifatto quando non coincidono con la configurazione: un indice con segnaposto di livello 1 sotto
+un'interfaccia che dichiara il livello 2 sarebbe un'incoerenza fra ciò che il sistema afferma e ciò
+che il retrieval contiene.
+
+Scelte e alternative scartate di questo livello: **ADR-020** in `docs/DECISIONS.md`.
 
 ### Pseudonimizzazione reversibile
 
