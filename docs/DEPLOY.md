@@ -150,6 +150,13 @@ Poi dal browser:
 3. Nella scheda **Sicurezza**, l'audit trail registra l'indirizzo reale del visitatore e non
    `127.0.0.1`: se compare l'indirizzo del proxy, `X-Forwarded-For` non arriva e i limiti di
    frequenza varrebbero per tutti i visitatori insieme.
+4. Nella stessa scheda, i livelli di anonimizzazione dichiarano
+   **`1+2 (regex + NER it_core_news_lg)`**. Se leggi `1 (regex)` con un avviso accanto, il livello 2
+   non sta lavorando e il motivo è scritto lì.
+
+La prova più diretta che il livello 2 funziona davvero: nella scheda **Documenti** carica un file che
+contenga un nome **non** introdotto da un ruolo contrattuale — «il testimone Mario Bianchi ha
+dichiarato». Nel pannello «dopo» deve comparire un segnaposto: a sole regex resterebbe in chiaro.
 
 ## Manutenzione
 
@@ -160,7 +167,8 @@ docker compose exec secure-rag cat /app/logs/audit.jsonl | tail -20   # audit tr
 docker compose down                                     # arresto (i volumi restano)
 ```
 
-Per reindicizzare da zero, per esempio dopo aver cambiato i documenti o il modello di embedding:
+Per reindicizzare da zero dopo aver cambiato i **documenti** o il **modello di embedding** — non serve
+per un cambio del livello di anonimizzazione, che il container rileva da sé:
 
 ```bash
 docker compose down

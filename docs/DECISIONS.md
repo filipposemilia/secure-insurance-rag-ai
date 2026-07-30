@@ -16,7 +16,8 @@ embedding, e viene riapplicato sul contesto recuperato prima della composizione 
 usciti dal perimetro al momento dell'embedding. Cifrare i chunk: impedisce la ricerca semantica.
 
 **Conseguenze.** Nel vector store non esiste un dato personale in chiaro. La ri-identificazione è
-possibile solo lato applicativo tramite il vault in memoria. Il doppio passaggio costa poco ed è
+possibile solo lato applicativo tramite il vault (in memoria allora; cifrato su disco e opzionale da
+ADR-018, spento per impostazione predefinita). Il doppio passaggio costa poco ed è
 una difesa in profondità voluta.
 
 ---
@@ -140,8 +141,12 @@ corpus, solo caricati, o entrambi.
 renderebbe permanente la contaminazione del corpus aziendale con contenuto non verificato.
 
 **Conseguenze.** Gli upload si svuotano con un pulsante senza toccare l'indice ufficiale, e il
-filtro RBAC continua ad applicarsi anche a essi. Limite noto: la collection è unica per istanza,
-quindi in un deployment multiutente andrebbe partizionata per sessione.
+filtro RBAC continua ad applicarsi anche a essi. Limite noto al momento della decisione: la collection
+era unica per istanza, quindi in un deployment multiutente andava partizionata per sessione.
+
+> **Superata in parte da ADR-015**, che introduce una collection per sessione. Il limite qui dichiarato
+> «per un deployment multiutente» si è materializzato appena l'istanza è diventata pubblica — è il
+> motivo per cui vale la pena scrivere i limiti anche quando sembrano ipotetici.
 
 ---
 

@@ -29,9 +29,9 @@ di 540 MB. Il livello 3 di ADR-019 (LLM locale, ~5 GB) resta future work vincola
 
 ## Future work
 
-Non implementato per scelta. Ogni voce indica cosa aggiungerebbe e perché è stata esclusa: alcune
-sono state escluse dal vincolo di tempo iniziale, altre — quelle segnate come vincolate all'hardware
-— dalle risorse della macchina che ospita l'istanza pubblica.
+Non implementato per scelta. Ogni voce indica cosa aggiungerebbe e perché è stata esclusa: alcune per
+il vincolo di tempo iniziale, alcune perché servirebbe un dataset annotato che non esiste, una — l'LLM
+locale — perché cambia la classe di hardware necessaria.
 
 ### Sicurezza
 
@@ -41,7 +41,7 @@ sono state escluse dal vincolo di tempo iniziale, altre — quelle segnate come 
 | **Impronta dei pattern nella marca dell'indice** (ADR-021) | La marca registra i livelli, non la versione delle regex: modificando `_PATTERNS` senza cambiare livello, l'indice risulta coerente pur non essendolo | Imporrebbe una reindicizzazione a ogni modifica di una regex, anche irrilevante. Il costo oggi supera il guadagno | ~2 h |
 | **Riconoscimento di dati sanitari e giudiziari** (Art. 9 e 10 GDPR) | Diagnosi, percentuali di invalidità, verbali: **le uniche categorie dell'elenco legale che restano scoperte**, perché non sono entità ma affermazioni — non le vede una regex e non le vede nemmeno un NER | Richiede un classificatore addestrato o un NER medico-legale italiano, più un dataset annotato per misurarne i falsi negativi | ~2 g |
 | **LLM locale come terzo livello di anonimizzazione** (ADR-019) | Copre proprio ciò che regex e NER non vedono: dati sanitari, giudiziari e narrativa identificante. Girando su infrastruttura propria non c'è trasferimento a terzi, quindi l'obiezione che vale per i modelli esterni decade | Un modello da 8B quantizzato richiede ~5 GB di RAM: sui 12 GB del VPS ci starebbe, ma insieme alla generazione e al livello 2 il margine si assottiglia, e il costo per pagina passa da millisecondi a secondi. Va applicato **solo** ai segmenti che i primi due livelli non risolvono, e valutato con una misura di latenza reale prima che a occhio | ~1 g |
-| **Servizi in compartimenti separati** (ADR-019) | Quattro container — applicazione, anonimizzazione, vector store, inferenza — con il container di inferenza **senza accesso a internet**: la garanzia diventa verificabile guardando la rete, invece che dichiarata. Permette anche di spostare l'inferenza su una macchina con GPU senza toccare il codice | Ha senso solo insieme all'LLM locale, quindi condivide lo stesso vincolo di risorse. Presidio ha già immagini Docker ufficiali, quindi un container su quattro esiste pronto | ~4 h |
+| **Servizi in compartimenti separati** (ADR-019) | Quattro container — applicazione, anonimizzazione, vector store, inferenza — con il container di inferenza **senza accesso a internet**: la garanzia diventa verificabile guardando la rete, invece che dichiarata. Permette anche di spostare l'inferenza su una macchina con GPU senza toccare il codice | Ha senso soprattutto insieme all'LLM locale, quindi condivide lo stesso vincolo di risorse. Oggi l'anonimizzazione gira **dentro** il processo dell'applicazione: estrarla è la parte già pronta, perché Presidio ha immagini Docker ufficiali e la firma di `PIIMasker` non cambierebbe | ~4 h |
 | **Classificatore di prompt injection** | Regge le riformulazioni che eludono le regole deterministiche | Richiede un dataset di attacchi e una valutazione seria per non generare falsi positivi | ~1 g |
 | **NeMo Guardrails / Guardrails AI** | Policy dichiarative su argomenti ammessi e formato delle risposte | Sovrapposto a quanto già dimostrato dai guard a regole | ~4 h |
 | **Autenticazione reale (OIDC/JWT)** | Il ruolo verificato da un identity provider invece che dichiarato | Fuori dallo scopo di un PoC senza backend | ~1 g |

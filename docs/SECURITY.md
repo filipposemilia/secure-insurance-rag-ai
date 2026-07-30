@@ -110,7 +110,7 @@ specifici:
 | Controllo | Cosa impedisce | Dove |
 | :--- | :--- | :--- |
 | Formato ammesso (`.pdf`, `.md`, `.txt`) e limite di dimensione e di chunk | Saturazione del contesto e dei costi, file eseguibili | `uploads.py::process_upload` |
-| Anonimizzazione PII **prima** dell'indicizzazione | Che i dati personali del file caricato raggiungano il provider LLM | `uploads.py`, `security/pii.py` |
+| Anonimizzazione PII **prima** dell'indicizzazione, con gli stessi due livelli del corpus | Che i dati personali del file caricato raggiungano il provider LLM | `uploads.py`, `security/pii.py`, `security/ner.py` |
 | Scansione anti-injection al momento del caricamento, con referto all'utente | Che un payload nascosto agisca prima che qualcuno se ne accorga | `uploads.py`, `security/guardrails.py::scan_context` |
 
 Quattro proprietà di isolamento:
@@ -129,8 +129,10 @@ I chunk sospetti vengono indicizzati e marcati, non scartati: il context guard l
 a ogni interrogazione. Così l'attacco resta visibile nell'audit trail invece di sparire in silenzio,
 e l'utente riceve una nota esplicita nella risposta.
 
-**Limite dichiarato.** La collection degli upload è unica per l'istanza: in un deployment
-multiutente andrebbe partizionata per sessione o per utente, non solo per clearance.
+**Limite dichiarato.** L'isolamento è per **sessione del browser**, non per identità: chi apre una
+scheda nuova ottiene una collection nuova, e chi condivide il proprio token di sessione condivide i
+documenti. Senza un identity provider non si può fare di meglio — è lo stesso limite
+dell'autenticazione, non uno in più.
 
 ## Difesa in profondità: cosa succede se un layer cede
 

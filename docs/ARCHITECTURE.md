@@ -92,9 +92,10 @@ flowchart TB
 sono gli eventi che più interessano a un revisore. Le frecce non sono disegnate solo per non
 attraversare l'intero diagramma.
 
-Il nodo rosso a sinistra e quello a destra non sono la stessa cosa: un blocco in **ingresso** non è
-mai arrivato al modello, un blocco in **uscita** ha già consumato la chiamata. È la differenza fra
-una difesa che fa risparmiare e una che fa solo evitare il danno.
+I due nodi rossi di rifiuto non sono la stessa cosa, ed è il motivo per cui portano etichette diverse:
+**«zero token spesi»** è un blocco in ingresso, che non è mai arrivato al modello; **«token già
+spesi»** è un blocco in uscita, dove la chiamata è stata pagata e si butta la risposta. È la
+differenza fra una difesa che fa risparmiare e una che fa solo evitare il danno.
 
 ### Passo per passo
 
