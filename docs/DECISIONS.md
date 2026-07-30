@@ -461,9 +461,52 @@ fissata, e `PII_NER_ENABLED` vale `true` nel compose. Nell'installazione da sorg
 perché lì il vincolo non è la RAM ma il tempo di installazione.
 
 Vincolo operativo che ne deriva: **cambiare `PII_NER_ENABLED` impone un nuovo `ingest`**, perché il
-corpus indicizzato porta i segnaposto del livello attivo al momento dell'indicizzazione. Lasciarlo
-come avvertenza nella documentazione non bastava — su un volume persistente l'ingestion viene
-saltata, quindi un indice di livello 1 sarebbe sopravvissuto sotto un'interfaccia che dichiara il
-livello 2. L'indice porta perciò una **marca** con i livelli usati per costruirlo
-(`.anonymization`), e `ingest_decision()` reindicizza quando non coincide con la configurazione, o
-quando manca: un indice di provenienza ignota non permette di affermare nulla sui propri segnaposto.
+corpus indicizzato porta i segnaposto del livello attivo al momento dell'indicizzazione. Come è
+imposto invece che raccomandato è in ADR-021.
+
+---
+
+## ADR-021 — L'indice dichiara con cosa è stato costruito
+
+**Contesto.** Attivando il livello 2 su un'istanza già in esercizio è emerso un percorso che nessun
+test copriva e che la documentazione da sola non avrebbe evitato. `docker/entrypoint.sh` salta
+l'ingestion quando l'indice è già popolato — scelta corretta, perché su un volume persistente
+rifarla a ogni riavvio ripagherebbe gli embedding. Ma il volume del VPS conteneva un indice costruito
+a **livello 1**: il container sarebbe partito dichiarando «1+2 (regex + NER)» sopra chunk i cui
+segnaposto vengono dalle sole regex.
+
+Nessun errore, nessun log, nessun sintomo visibile. Solo un'affermazione falsa su un layer di
+sicurezza — la peggiore delle uscite possibili per questo progetto, che altrove ha già speso righe di
+codice per non degradare in silenzio.
+
+Il primo rimedio scritto era un'**avvertenza** in `README.md` e `.env.example`: «cambiare il flag
+richiede un nuovo `ingest`». È il tipo di garanzia che dipende da chi legge.
+
+**Decisione.** L'indice porta una **marca di provenienza**: il file `.anonymization` nella propria
+directory, con i livelli usati per costruirlo, scritto da `write_index_stamp()` dopo — non prima —
+l'indicizzazione, così un'indicizzazione fallita non lascia un indice vecchio marcato come nuovo.
+All'avvio `ingest_decision()` confronta la marca con la configurazione attiva e restituisce **se
+indicizzare e perché**, che l'entrypoint stampa nei log.
+
+Reindicizza in tre casi: indice assente, livelli diversi da quelli configurati, **marca mancante**.
+Il terzo è il meno ovvio e il più importante: un indice di provenienza ignota non permette di
+affermare nulla sui propri segnaposto, e su un layer di anonimizzazione «probabilmente è a livello 1»
+non è una risposta. Costa un'indicizzazione una volta sola, sui volumi creati prima che la marca
+esistesse.
+
+**Alternative scartate.** *L'avvertenza in documentazione*: una garanzia affidata alla memoria di chi
+fa il deploy. *Una variabile `FORCE_REINDEX`*: sposta il problema, perché va ricordata esattamente
+quando si è distratti. *Cancellare il volume a ogni aggiornamento*: butta anche l'audit trail e paga
+embedding che non serviva ripagare. *Metadati della collection Chroma invece di un file*: più elegante
+in teoria, ma il wrapper `langchain-chroma` non li espone in modo diretto, e un file nella directory
+dell'indice si ispeziona con `cat` durante un incidente.
+
+**Conseguenze.** Il meccanismo è **indipendente da Presidio** e sopravvive alla decisione che l'ha
+generato: quando arriverà il livello 3 di ADR-019, l'indice se ne accorgerà da sé. Il prezzo è una
+reindicizzazione inattesa al primo avvio dopo l'aggiornamento — dichiarata in `docs/DEPLOY.md` con
+l'esempio della riga di log da cercare, perché una reindicizzazione non spiegata somiglia a un guasto.
+
+Un limite da non nascondere: la marca registra i **livelli**, non il modello esatto né la versione dei
+pattern. Cambiando i pattern in `security/pii.py` senza cambiare livello, l'indice risulta coerente
+pur non essendolo del tutto. Registrare un'impronta dei pattern sarebbe il passo successivo, ma
+imporrebbe una reindicizzazione a ogni modifica di una regex: per ora il costo non vale il guadagno.
