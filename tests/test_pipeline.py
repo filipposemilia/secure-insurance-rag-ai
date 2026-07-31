@@ -200,3 +200,28 @@ def test_l_ambito_entrambi_unisce_corpus_e_sessione(sessione_con_upload):
 
     assert "perizia.md" in risposta.sources
     assert len(risposta.sources) > 1, "l'ambito «entrambi» deve leggere anche il corpus"
+
+
+# ------------------------------------------------- resa del motore offline
+
+
+def test_il_motore_offline_non_restituisce_markdown_grezzo(pipeline: SecureRAGPipeline):
+    """È la risposta che vede il visitatore quando scatta il tetto di spesa: deve sembrare una
+    risposta, non un incollaggio. `## SEZIONE 2` ricopiato dal documento veniva reso come un titolo
+    enorme in mezzo al testo.
+    """
+    risposta = pipeline.answer("Qual è la franchigia cyber?", role="agent")
+
+    for riga in risposta.answer.splitlines():
+        assert not riga.lstrip("- ").startswith("#"), f"markdown grezzo nella risposta: {riga}"
+
+
+def test_la_citazione_del_motore_offline_non_e_troncata(pipeline: SecureRAGPipeline):
+    """Regressione: il blocco fonte contiene segnaposto fra parentesi quadre, e la ricerca della
+    chiusura si fermava alla prima — la citazione usciva come «polizza [PRATICA_001» senza chiudere.
+    """
+    risposta = pipeline.answer("Qual è la franchigia cyber?", role="agent")
+
+    riga_fonti = next(r for r in risposta.answer.splitlines() if r.startswith("Fonti:"))
+    assert riga_fonti.count("[") == riga_fonti.count("]")
+    assert ".md" in riga_fonti

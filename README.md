@@ -96,7 +96,7 @@ dimensione diversa: 1536 per `text-embedding-3-small`, 256 per quello determinis
 provider nuovo va eseguito `ingest` una volta per quel provider; gli indici già costruiti restano
 validi e si può alternare senza re-indicizzare.
 
-Demo guidata: `bash scripts/demo.sh openai` (o `fake`). Test: `.venv/bin/pytest -q` — 140 test, tutti
+Demo guidata: `bash scripts/demo.sh openai` (o `fake`). Test: `.venv/bin/pytest -q` — 153 test, tutti
 offline, nessuna API key richiesta.
 
 ## Architettura
@@ -139,11 +139,11 @@ un'architettura enterprise: **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**.
 | LLM04 — Denial of Service | Limite di lunghezza query, `k` di retrieval fisso | `security/guardrails.py` |
 | LLM06 — Sensitive Information Disclosure | Masking pre-embedding a due livelli, regex + NER, entrambi attivi in produzione; RBAC sul retrieval, output guard, audit senza query in chiaro | `security/pii.py`, `security/ner.py`, `vectorstore.py`, `security/audit.py` |
 | LLM08 — Excessive Agency | Sistema read-only: il modello non compie azioni | architettura |
-| LLM09 — Overreliance | `temperature=0`, obbligo di citazione, formula di non-risposta, controllo di groundedness | `rag.py`, `security/guardrails.py` |
+| LLM09 — Overreliance | `temperature=0`, obbligo di citazione, formula di non-risposta, e un controllo che **blocca le risposte con cifre non presenti nei documenti**: un massimale inventato non arriva all'utente | `rag.py`, `security/guardrails.py` |
 
 I limiti sono dichiarati esplicitamente — guardrail a regole eludibili con riformulazioni, dati
 sanitari e giudiziari che nessuno dei due livelli di anonimizzazione può vedere, nessuna
-autenticazione reale, groundedness misurata in modo lessicale:
+autenticazione reale, groundedness che è comunque un proxy e non una garanzia:
 **[docs/SECURITY.md](docs/SECURITY.md)**.
 
 ### Attivare il livello 2 in locale
@@ -188,7 +188,7 @@ src/secure_rag/
 
 app/streamlit_app.py       UI demo a schede: chat, upload documenti, sicurezza
 data/policies/             4 documenti sintetici, uno deliberatamente compromesso
-tests/                     140 test, nessuna chiamata di rete
+tests/                     153 test, nessuna chiamata di rete
 ```
 
 ## Deploy

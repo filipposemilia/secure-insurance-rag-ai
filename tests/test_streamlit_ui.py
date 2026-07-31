@@ -75,6 +75,22 @@ def test_la_scheda_sicurezza_dichiara_i_livelli_di_anonimizzazione(indexed_app):
     assert any("1 (regex)" in testo for testo in testi)
 
 
+def test_la_risposta_mostra_l_estratto_su_cui_si_basa(indexed_app):
+    """La citazione deve essere verificabile, non dichiarata: un nome di file si inventa,
+    l'estratto che il modello ha letto no.
+    """
+    app = run_app()
+    pronte = [b for b in app.button if b.label == "Franchigia cyber"]
+    assert pronte, "la domanda di esempio deve essere presente a conversazione vuota"
+    pronte[0].click().run()
+
+    assert not app.exception
+    testi = [markdown.value for markdown in app.markdown]
+    assert any("Su cosa si basa questa risposta" in testo for testo in testi)
+    # L'estratto mostrato è quello anonimizzato, cioè quello davvero inviato al modello.
+    assert any(testo.startswith(">") for testo in testi)
+
+
 def test_lo_scenario_produce_l_esito_al_primo_click(indexed_app):
     """Regressione: il click rimandava la domanda al rerun successivo, che non arrivava mai.
 

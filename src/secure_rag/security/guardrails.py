@@ -235,17 +235,48 @@ def validate_output(answer: str, context_used: str = "", masker: PIIMasker | Non
     return GuardVerdict(True, "output_ok", "Nessun dato personale in chiaro, risposta ancorata al contesto.")
 
 
-def _is_grounded(answer: str, context: str, threshold: float = 0.35) -> float | bool:
-    """Proxy di groundedness: quota di termini significativi della risposta presenti nel contesto.
+# Cifre della risposta, con i separatori italiani di migliaia e decimali.
+_NUMERI_RE = re.compile(r"\d[\d.,]*")
 
-    È volutamente una euristica lessicale, non una misura semantica. In produzione si userebbe un
-    valutatore basato su modello (LLM-as-a-judge o Ragas) tracciato su LangSmith.
+
+def _numeri(testo: str) -> set[str]:
+    """Valori numerici normalizzati, per confrontarli a prescindere dalla formattazione.
+
+    `5.000.000`, `5000000` e `5.000.000,00` devono risultare lo stesso valore: è la stessa cifra
+    scritta in tre modi, e un controllo che li distinguesse bloccherebbe risposte corrette.
     """
-    answer_tokens = {
-        token for token in re.findall(r"\w{5,}", answer.lower())
-    }
+    trovati = set()
+    for grezzo in _NUMERI_RE.findall(testo):
+        pulito = grezzo.rstrip(".,").replace(".", "").replace(",", "")
+        if pulito:
+            trovati.add(pulito.lstrip("0") or "0")
+    return trovati
+
+
+def _is_grounded(answer: str, context: str, threshold: float = 0.2) -> bool:
+    """Proxy di groundedness, in due controlli con pesi diversi.
+
+    **1. Ogni cifra della risposta deve esistere nel contesto.** È il controllo che conta: in una
+    polizza l'allucinazione dannosa non è una parola fuori posto, è un massimale inventato, una
+    franchigia sbagliata, un articolo che non esiste. Chi legge agisce su quei numeri.
+
+    **2. Una soglia lessicale minima**, contro le risposte costruite di sana pianta che non
+    condividono nemmeno il vocabolario del contesto.
+
+    La versione precedente aveva **solo** il secondo controllo, con soglia 0,35, e confondeva la
+    parafrasi con l'invenzione: una risposta corretta che spiegava il dato con parole proprie veniva
+    soppressa, mentre una che ricopiava il lessico del contesto cambiando una cifra passava. Era il
+    contrario di quello che serve — e si è visto solo chiedendo al modello risposte più discorsive.
+
+    Resta un proxy, non una misura semantica: in produzione servirebbe un valutatore basato su
+    modello (LLM-as-a-judge o Ragas) tracciato su LangSmith.
+    """
+    numeri_inventati = _numeri(answer) - _numeri(context)
+    if numeri_inventati:
+        return False
+
+    answer_tokens = {token for token in re.findall(r"\w{5,}", answer.lower())}
     if not answer_tokens:
         return True
     context_tokens = set(re.findall(r"\w{5,}", context.lower()))
-    overlap = len(answer_tokens & context_tokens) / len(answer_tokens)
-    return overlap >= threshold
+    return len(answer_tokens & context_tokens) / len(answer_tokens) >= threshold

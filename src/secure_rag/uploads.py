@@ -52,6 +52,8 @@ class UploadReport:
     uploaded_at: str = ""
     # Livelli di anonimizzazione applicati a questo file: fa parte del referto quanto il conteggio.
     anonymization_levels: str = ""
+    # Domande sensate su *questo* documento, per non lasciare l'utente davanti a un campo vuoto.
+    suggested_questions: list[str] = field(default_factory=list)
 
     @property
     def is_clean(self) -> bool:
@@ -80,6 +82,43 @@ def extract_text(file_name: str, data: bytes) -> str:
     raise ValueError(
         f"Formato non supportato: {file_name}. Ammessi: {', '.join(SUPPORTED_SUFFIXES)}."
     )
+
+
+# Dal lessico presente nel documento alla domanda che ha senso porgli. L'ordine è quello in cui le
+# domande vengono proposte: prima gli importi, che sono ciò che si cerca per primo in una polizza.
+_DOMANDE_SUGGERITE: tuple[tuple[tuple[str, ...], str], ...] = (
+    (("massimale",), "Qual è il massimale previsto?"),
+    (("franchigia", "scoperto"), "A quanto ammonta la franchigia?"),
+    (("esclus", "non sono coperti"), "Che cosa è escluso dalla copertura?"),
+    (("denuncia", "denunciare"), "Entro quanto va denunciato un sinistro?"),
+    (("indennizzo", "risarcimento", "liquidazione"), "Come viene calcolato l'indennizzo?"),
+    (("retroattiv", "postuma", "ultrattiv"), "La copertura vale anche dopo la cessazione?"),
+    (("premio",), "A quanto ammonta il premio?"),
+    (("decorrenza", "scadenza", "durata"), "Qual è il periodo di validità?"),
+)
+
+MAX_DOMANDE_SUGGERITE = 3
+
+
+def suggerisci_domande(testo: str) -> list[str]:
+    """Domande sensate su questo documento, ricavate dal lessico che contiene.
+
+    Deliberatamente **deterministiche**: generarle con il modello costerebbe una chiamata per ogni
+    file caricato, prima ancora che l'utente abbia deciso di chiedere qualcosa, e su un'istanza
+    pubblica con un tetto di spesa sarebbe la spesa peggiore possibile — pagata sempre, utile
+    qualche volta.
+
+    Lavorano sul testo **già anonimizzato**, che è l'unico che il resto del sistema conosce.
+    """
+    testo_normalizzato = testo.lower()
+    trovate = [
+        domanda
+        for chiavi, domanda in _DOMANDE_SUGGERITE
+        if any(chiave in testo_normalizzato for chiave in chiavi)
+    ]
+    # Un documento che non contiene nessuno di questi termini non è necessariamente una polizza:
+    # meglio una domanda generica che nessuna, perché il campo vuoto non suggerisce cosa farne.
+    return trovate[:MAX_DOMANDE_SUGGERITE] or ["Di che cosa tratta questo documento?"]
 
 
 def process_upload(
@@ -130,6 +169,7 @@ def process_upload(
     report.pii_types = masking.entity_types
     report.preview_original = raw_text[:PREVIEW_CHARS]
     report.preview_masked = masking.masked_text[:PREVIEW_CHARS]
+    report.suggested_questions = suggerisci_domande(masking.masked_text)
 
     # --- Segmentazione ---------------------------------------------------------
     splitter = RecursiveCharacterTextSplitter(

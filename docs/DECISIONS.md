@@ -528,3 +528,48 @@ Un limite da non nascondere: la marca registra i **livelli**, non il modello esa
 pattern. Cambiando i pattern in `security/pii.py` senza cambiare livello, l'indice risulta coerente
 pur non essendolo del tutto. Registrare un'impronta dei pattern sarebbe il passo successivo, ma
 imporrebbe una reindicizzazione a ogni modifica di una regex: per ora il costo non vale il guadagno.
+
+---
+
+## ADR-022 — La groundedness si misura sulle cifre, non sulle parole
+
+**Contesto.** L'output guard verifica che la risposta sia ancorata al contesto recuperato. La misura
+era la quota di termini della risposta presenti nel contesto, con soglia 0,35 — una euristica
+lessicale, dichiarata come proxy.
+
+Il difetto è emerso chiedendo al modello risposte più discorsive: una risposta **corretta** che
+spiegava il dato con parole proprie scendeva sotto soglia e veniva soppressa. Verificando il caso
+opposto è venuto fuori il problema vero:
+
+> Contesto: «Massimale 5.000.000 EUR, franchigia 250 EUR.»
+> Risposta: «Il massimale è di 10.000.000 EUR, con franchigia di 250 EUR.» → **passava**
+
+Ricopiando il vocabolario del contesto e cambiando **solo la cifra**, la sovrapposizione lessicale
+restava massima. La misura era cieca esattamente sul caso che doveva intercettare, e severa sul caso
+che doveva lasciar passare.
+
+**Decisione.** Due controlli con pesi diversi:
+
+1. **Ogni cifra della risposta deve esistere nel contesto.** In una polizza l'allucinazione dannosa
+   non è una parola fuori posto: è un massimale inventato, una franchigia sbagliata, un termine di
+   denuncia che non esiste. Chi legge agisce su quei numeri. Il confronto è su valori normalizzati,
+   perché `5.000.000` e `5000000` sono la stessa cifra scritta in due modi.
+2. **Una soglia lessicale minima**, abbassata a 0,2, contro le risposte inventate di sana pianta che
+   non condividono nemmeno il vocabolario del contesto.
+
+**Alternative scartate.** *Abbassare e basta la soglia lessicale*: avrebbe sbloccato le parafrasi
+lasciando passare anche i numeri inventati, cioè peggiorando il controllo per far funzionare la
+presentazione. *Rinunciare alle risposte discorsive*: si sarebbe adattato il prodotto al difetto
+della misura. *Un valutatore basato su modello* (LLM-as-a-judge, Ragas): è la strada giusta in
+produzione, ma raddoppia le chiamate e va valutata su un dataset di riferimento che non esiste
+ancora — resta in `ROADMAP.md`.
+
+**Conseguenze.** Il guard è più severo dove conta e più permissivo dove non contava, ed è la
+direzione giusta per entrambe le proprietà. Restano due limiti dichiarati: una cifra **corretta ma
+riferita alla voce sbagliata** («franchigia 5.000.000») supera il controllo, perché entrambe le cifre
+esistono nel contesto; e un'affermazione falsa senza numeri — «la copertura è illimitata» — è
+intercettata solo dalla soglia lessicale, che è debole per costruzione.
+
+La lezione generale, che vale oltre questo controllo: **una misura proxy va verificata sui due lati**.
+Questa era stata provata solo sul caso «risposta inventata bloccata», mai sul caso «risposta corretta
+ammessa» né su «numero alterato bloccato», e per mesi ha protetto meno di quanto sembrasse.

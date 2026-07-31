@@ -106,11 +106,14 @@ class DeterministicChatModel(BaseChatModel):
         candidates: list[tuple[int, int, str, str]] = []  # (score, posizione, frase, fonte)
         position = 0
         for block in context.split("\n\n---\n\n"):
-            source_match = re.search(r"\[fonte: ([^\]]+)\]", block)
+            source_match = _FONTE_RE.search(block)
             source = source_match.group(1) if source_match else "documento sconosciuto"
-            body = re.sub(r"\[fonte: [^\]]+\]", "", block)
+            # Del blocco fonte interessa il documento: l'identificativo di polizza che lo accompagna
+            # è già un segnaposto, e in una riga di citazione è rumore.
+            source = source.split(" · polizza")[0].strip()
+            body = _FONTE_RE.sub("", block)
             for sentence in re.split(r"(?<=[.;])\s+|\n", body):
-                sentence = sentence.strip()
+                sentence = _spoglia_markdown(sentence)
                 if len(sentence) <= 30:
                     continue
                 score = len(question_tokens & set(_tokenize(sentence)))
@@ -130,6 +133,23 @@ class DeterministicChatModel(BaseChatModel):
         used_sources = sorted({source for _, _, _, source in best})
         citation = "\n\nFonti: " + "; ".join(used_sources)
         return f"Dalla documentazione risulta quanto segue:\n{body_lines}{citation}"
+
+
+# Il blocco fonte contiene a sua volta segnaposto fra parentesi quadre — `[fonte: x · polizza
+# [PRATICA_001]]` — quindi la chiusura da cercare è l'**ultima** della riga, non la prima. Con
+# `[^\]]+` la citazione usciva troncata: `… polizza [PRATICA_001`.
+_FONTE_RE = re.compile(r"\[fonte: (.+)\]")
+
+
+def _spoglia_markdown(frase: str) -> str:
+    """Toglie i marcatori di intestazione e di elenco dall'estratto citato.
+
+    Il motore offline ricopia frasi dai documenti, che sono in markdown: `## SEZIONE 2 — CYBER RISK`
+    riportato tale e quale viene poi reso come un titolo enorme in mezzo alla risposta. È ciò che
+    vede un visitatore dell'istanza pubblica quando scatta il tetto giornaliero di spesa — cioè
+    proprio il momento in cui la demo deve continuare a sembrare funzionante.
+    """
+    return re.sub(r"^[#>\-*\s]+", "", frase).strip()
 
 
 def _extract_between(text: str, start: str, end: str) -> str:

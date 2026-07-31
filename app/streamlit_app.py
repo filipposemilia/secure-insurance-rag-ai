@@ -15,6 +15,7 @@ Avvio:  streamlit run app/streamlit_app.py
 from __future__ import annotations
 
 import sys
+import time
 from pathlib import Path
 from uuid import uuid4
 
@@ -360,8 +361,33 @@ with st.sidebar:
 # ---------------------------------------------------------------------------
 
 
-def render_response(response: RAGResponse) -> None:
-    """Mostra risposta, esiti di sicurezza e fonti."""
+def rivela_progressivamente(testo: str, ritardo: float = 0.012):
+    """Fa comparire la risposta parola per parola, come se venisse scritta.
+
+    **Non è streaming del modello, ed è una scelta di sicurezza, non un limite tecnico.** Lo
+    streaming vero manda in pagina i token man mano che il modello li produce, cioè *prima*
+    dell'output guard: un dato personale rigenerato dal modello o un massimale inventato sarebbero
+    già stati letti quando il guard interviene, e ritirarli dopo non li fa dimenticare a chi li ha
+    visti. Il progetto dichiara che l'output guard blocca **prima della consegna**, e quella frase
+    deve restare vera.
+
+    Qui il testo è già stato verificato: la rivelazione progressiva dà lo stesso ritmo di lettura
+    senza spostare il confine. L'attesa vera è coperta dall'avanzamento dei passi di sicurezza, che
+    è informazione utile invece che un'animazione.
+    """
+    for indice, parola in enumerate(testo.split(" ")):
+        yield parola + " "
+        if indice % 3 == 0:
+            time.sleep(ritardo)
+
+
+def render_response(response: RAGResponse, reveal: bool = False) -> None:
+    """Mostra risposta, esiti di sicurezza e fonti.
+
+    `reveal` distingue una risposta appena prodotta — che compare progressivamente — da una
+    ripescata dallo storico, che deve comparire subito: rianimare ogni risposta a ogni rerun di
+    Streamlit sarebbe fastidioso, non vivo.
+    """
     if response.rate_limit == "quota_globale":
         st.info(
             "Tetto giornaliero di richieste al modello in rete raggiunto: questa risposta è stata "
@@ -372,20 +398,17 @@ def render_response(response: RAGResponse) -> None:
 
     if response.blocked:
         st.error(response.answer, icon="🛑")
+    elif reveal:
+        # Rivelazione progressiva: il testo compare mentre si legge, invece di apparire tutto
+        # insieme dopo l'attesa. Arriva **dopo** l'output guard, mai durante la generazione — si
+        # veda la nota in `rivela_progressivamente`.
+        st.write_stream(rivela_progressivamente(response.answer))
     else:
         st.markdown(response.answer)
 
+    # Il verdetto di sicurezza prima dei numeri: è la riga che conta per chi legge, e i quattro
+    # riquadri uguali di prima la mettevano sullo stesso piano della latenza.
     events = response.security_events
-    columns = st.columns(4)
-    columns[0].metric("Chi ha chiesto", ROLE_LABELS.get(response.role, response.role))
-    columns[1].metric("Dove ha cercato", SCOPE_LABELS.get(response.scope, response.scope))
-    columns[2].metric("Tempo di risposta", f"{response.latency_ms / 1000:.1f} s")
-    columns[3].metric(
-        "Anomalie rilevate",
-        len(events),
-        help="Controlli di sicurezza scattati durante questa richiesta.",
-    )
-
     if events:
         for event in events:
             st.warning(event, icon="⚠️")
@@ -395,6 +418,13 @@ def render_response(response: RAGResponse) -> None:
             "consultati erano integri e la risposta non contiene dati personali.",
             icon="✅",
         )
+
+    st.caption(
+        f"👤 {ROLE_LABELS.get(response.role, response.role)}  ·  "
+        f"🔍 {SCOPE_LABELS.get(response.scope, response.scope)}  ·  "
+        f"⏱ {response.latency_ms / 1000:.1f} s  ·  "
+        f"🤖 {response.provider}"
+    )
 
     if response.context_scan and response.context_scan.findings:
         with st.expander("Perché un documento è stato scartato"):
@@ -406,7 +436,17 @@ def render_response(response: RAGResponse) -> None:
             for finding in response.context_scan.findings:
                 st.code(finding, language=None)
 
-    if response.sources:
+    if response.citations:
+        st.markdown("**Su cosa si basa questa risposta**")
+        for indice, citazione in enumerate(response.citations, start=1):
+            icona = "📎" if citazione.uploaded else "📄"
+            with st.expander(f"{icona} {citazione.source}", expanded=False):
+                st.caption(
+                    "Estratto realmente inviato al modello, con i dati personali già sostituiti "
+                    "dai segnaposto. È la citazione resa verificabile: non «fidati», ma «guarda»."
+                )
+                st.markdown(f"> {citazione.excerpt.replace(chr(10), chr(10) + '> ')}")
+    elif response.sources:
         badges = [
             f"📎 {source}" if source in response.uploaded_sources else f"📄 {source}"
             for source in response.sources
@@ -466,7 +506,9 @@ def run_query(question: str, scope: str, as_role: str | None = None) -> RAGRespo
     # Tetto giornaliero raggiunto: si risponde comunque, ma senza spendere token.
     provider_effettivo = "fake" if verdetto.degraded else provider
 
-    with st.spinner("Elaborazione con controlli di sicurezza…"):
+    # I passi compaiono mentre avvengono: l'attesa diventa il racconto di ciò che il sistema sta
+    # facendo, che è poi la cosa che questo progetto vuole mostrare.
+    with st.status("Controlli di sicurezza in corso…", expanded=True) as stato:
         response = get_pipeline(provider_effettivo).answer(
             question,
             role=ruolo_effettivo,
@@ -475,6 +517,12 @@ def run_query(question: str, scope: str, as_role: str | None = None) -> RAGRespo
             # I documenti caricati vivono in una collection per sessione, e la pipeline non conosce
             # la sessione: senza questo passaggio cercherebbe in quella condivisa, che resta vuota.
             upload_collection=upload_settings(settings).collection_name,
+            on_step=lambda descrizione: stato.write(f"✓ {descrizione}"),
+        )
+        stato.update(
+            label=f"Sette controlli attraversati in {response.latency_ms / 1000:.1f} s",
+            state="complete",
+            expanded=False,
         )
 
     # La quota si consuma solo se il modello in rete è stato davvero interrogato. `prompt_sent` è
@@ -493,7 +541,7 @@ def ask(question: str, scope: str) -> None:
         st.write(question)
     with st.chat_message("assistant"):
         response = run_query(question, scope)
-        render_response(response)
+        render_response(response, reveal=True)
     st.session_state["history"].append({"question": question, "response": response})
 
 
@@ -790,10 +838,31 @@ with tab_docs:
             render_upload_report(report)
 
         st.divider()
+
+        # Domande ricavate dal lessico dei documenti caricati, non dal modello: un campo vuoto non
+        # dice cosa farne, e generare i suggerimenti con l'LLM costerebbe una chiamata per ogni
+        # file, pagata anche quando l'utente non chiede nulla.
+        suggerite: list[str] = []
+        for report in st.session_state["upload_reports"]:
+            for proposta in report.suggested_questions:
+                if proposta not in suggerite:
+                    suggerite.append(proposta)
+
+        if suggerite:
+            st.caption("**Da chiedere a questi documenti**")
+            colonne = st.columns(len(suggerite))
+            for colonna, proposta in zip(colonne, suggerite):
+                if colonna.button(proposta, key=f"sugg_{proposta}", width="stretch"):
+                    # Il clic riempie il campo e invia: chiedere una conferma sarebbe un passaggio
+                    # in più senza informazione in più.
+                    st.session_state["domanda_upload"] = proposta
+                    st.session_state["chiedi_subito"] = True
+
         left, right = st.columns([3, 1])
         with left:
             domanda = st.text_input(
                 "Chiedi qualcosa su questi documenti",
+                value=st.session_state.pop("domanda_upload", ""),
                 placeholder="Es. Qual è l'importo dell'indennizzo proposto?",
             )
         with right:
@@ -801,13 +870,15 @@ with tab_docs:
             st.write("")
             chiedi = st.button("Chiedi", width="stretch", type="primary")
 
+        chiedi = chiedi or st.session_state.pop("chiedi_subito", False)
+
         if chiedi and domanda:
             # Eseguita qui, non rimandata alla scheda Chat: in demo il risultato deve comparire
             # dov'è stato chiesto. Finisce comunque nello storico della conversazione.
             response = run_query(domanda, scope="uploads")
             st.session_state["history"].append({"question": domanda, "response": response})
             st.markdown("**Esito**")
-            render_response(response)
+            render_response(response, reveal=True)
 
         if st.button("Elimina tutti i miei documenti"):
             reset_collection(upload_settings(settings))

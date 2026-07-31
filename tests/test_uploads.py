@@ -9,7 +9,12 @@ import pytest
 from secure_rag.config import Settings
 from secure_rag.ingestion import build_documents
 from secure_rag.rag import SecureRAGPipeline
-from secure_rag.uploads import extract_text, process_upload
+from secure_rag.uploads import (
+    MAX_DOMANDE_SUGGERITE,
+    extract_text,
+    process_upload,
+    suggerisci_domande,
+)
 from secure_rag.vectorstore import (
     add_documents,
     collection_size,
@@ -283,3 +288,34 @@ def test_la_pulizia_elimina_solo_le_collection_di_upload(settings: Settings):
     assert any("sessione-da-pulire" in nome for nome in rimosse)
     assert collection_size(upload) == 0
     assert collection_size(settings) == corpus_prima, "il corpus non va toccato"
+
+
+# --------------------------------------------------- domande suggerite
+
+
+def test_le_domande_suggerite_vengono_dal_lessico_del_documento():
+    """Deterministiche di proposito: generarle con il modello costerebbe una chiamata per file."""
+    perizia = (
+        "SEZIONE 3 — l'Assicurato ha diritto all'indennizzo. Massimale 5.000.000 EUR, "
+        "franchigia 250 EUR. Sono esclusi i danni dolosi. Denuncia entro 72 ore."
+    )
+
+    domande = suggerisci_domande(perizia)
+
+    assert "Qual è il massimale previsto?" in domande
+    assert "A quanto ammonta la franchigia?" in domande
+    assert len(domande) <= MAX_DOMANDE_SUGGERITE
+
+
+def test_un_documento_senza_lessico_assicurativo_riceve_una_domanda_generica():
+    """Un campo vuoto non dice cosa farne: meglio una domanda generica che nessuna."""
+    assert suggerisci_domande("Verbale della riunione di consiglio.") == [
+        "Di che cosa tratta questo documento?"
+    ]
+
+
+def test_le_domande_finiscono_nel_referto():
+    documenti, report = process_upload("polizza.md", POLIZZA.encode("utf-8"))
+
+    assert report.accepted
+    assert report.suggested_questions
