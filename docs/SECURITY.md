@@ -19,7 +19,7 @@ anagrafica, codice fiscale, IBAN, contatti, dati di sinistro.
 | :--- | :--- | :--- | :--- |
 | **LLM01 — Prompt Injection (diretta)** | Input guard a pattern: override istruzioni, cambio ruolo, system override, jailbreak. Blocco prima della chiamata al modello. | `security/guardrails.py::validate_input` | Le regole sono deterministiche: un attacco riformulato con sinonimi o in altra lingua può eluderle. In produzione serve un classificatore addestrato. |
 | **LLM01 — Prompt Injection (indiretta)** | Scansione dei chunk recuperati: istruzioni rivolte all'assistente e contenuto nascosto (commenti HTML, testo invisibile) mandano il chunk in quarantena. Il system prompt dichiara inoltre che il contesto è dato, non istruzione, ed è racchiuso in delimitatori espliciti. | `security/guardrails.py::scan_context`, `rag.py::SYSTEM_PROMPT` | Stessa fragilità delle regole. Non copre payload steganografici o in immagini. |
-| **LLM02 — Insecure Output Handling** | La risposta non viene mai eseguita né interpretata: è testo mostrato in UI. Output guard su PII. | `security/guardrails.py::validate_output` | Non c'è sanitizzazione HTML perché non esiste rendering di HTML generato dal modello. |
+| **LLM02 — Insecure Output Handling** | La risposta non viene mai eseguita né interpretata: è testo mostrato in UI. Output guard su PII, applicato **anche durante lo streaming**: il testo compare mentre viene generato, ma solo dopo essere stato verificato (ADR-023). | `security/guardrails.py::validate_output`, `::StreamingOutputGuard` | Non c'è sanitizzazione HTML perché non esiste rendering di HTML generato dal modello. |
 | **LLM03 — Training Data Poisoning** | Non applicabile: nessun fine-tuning. È uno dei motivi per cui il RAG è preferibile in questo dominio. | — | Il corpus indicizzato **è** avvelenabile: è esattamente lo scenario coperto dal context guard. |
 | **LLM04 — Model Denial of Service** | Limite di lunghezza sulla query (`MAX_QUERY_LENGTH`), `k` di retrieval fisso, tetto di dimensione e di chunk sui file caricati, e **limiti di frequenza** sull'istanza pubblica: quota oraria per visitatore e tetto giornaliero complessivo. | `security/guardrails.py`, `uploads.py`, `security/ratelimit.py` | I contatori vivono nella memoria del processo: con più repliche servirebbe uno store condiviso. |
 | **LLM06 — Sensitive Information Disclosure** | PII masking **prima** dell'embedding: nel vector store non esiste un dato personale in chiaro. Coperti anche gli identificativi indiretti — numero di polizza, sinistro, targa, telaio — compreso quello nei metadati che compone il blocco fonte del prompt. RBAC sul retrieval. Output guard che blocca PII in risposta. Audit senza query in chiaro. | `security/pii.py`, `security/ner.py`, `rag.py::format_context`, `vectorstore.py`, `security/audit.py` | Il livello 1 è a regex, il livello 2 è a NER: entrambi attivi sull'istanza pubblica, il secondo opzionale nell'installazione da sorgente. Restano fuori in ogni caso i dati sanitari e giudiziari, che non sono entità ma affermazioni. Vedi la tabella di copertura GDPR più sotto. |
@@ -155,6 +155,23 @@ l'ingestion, il secondo passaggio lo intercetterebbe comunque.
 Analogamente, la protezione contro l'esfiltrazione di dati personali non dipende dal solo input
 guard: anche se una query malevola lo superasse, **nel vector store i dati personali non ci sono**.
 Il layer che conta davvero è l'anonimizzazione, non il filtro sulla domanda.
+
+## L'output guard durante lo streaming
+
+La risposta compare mentre il modello la produce, e questo di norma significa mandare in pagina i
+token **prima** di qualunque controllo. Qui non accade: `StreamingOutputGuard` sta fra il modello e
+lo schermo e rilascia solo ciò che ha già superato le verifiche.
+
+| Controllo | Quando |
+| :--- | :--- |
+| Dati personali nella risposta | **Preventivo**: il testo non esce se contiene PII |
+| Cifre non presenti nei documenti | **Preventivo**: un massimale inventato non compare |
+| Soglia lessicale di groundedness | **A posteriori**, alla chiusura: su un frammento il rapporto sarebbe rumore |
+
+La garanzia non è un'attenzione, è strutturale: **gli ultimi 96 caratteri del buffer non vengono mai
+rilasciati**, e la coda è più lunga del più esteso pattern riconosciuto. Un dato personale è quindi
+per intero dentro al buffer — e già verificato — prima che il suo primo carattere possa comparire a
+schermo. Dettaglio e alternative scartate: ADR-023.
 
 ## Privacy dell'audit trail
 

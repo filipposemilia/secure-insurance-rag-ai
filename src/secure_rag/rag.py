@@ -33,6 +33,7 @@ from secure_rag.security.audit import AuditLogger, AuditRecord, hash_query, utc_
 from secure_rag.security.guardrails import (
     ContextScanResult,
     GuardVerdict,
+    StreamingOutputGuard,
     scan_context,
     validate_input,
     validate_output,
@@ -225,6 +226,7 @@ class SecureRAGPipeline:
         rate_limit: str = "",
         upload_collection: str = "",
         on_step: Callable[[str], None] | None = None,
+        on_token: Callable[[str], None] | None = None,
     ) -> RAGResponse:
         """Esegue una richiesta completa applicando tutti i controlli.
 
@@ -327,14 +329,19 @@ class SecureRAGPipeline:
             self._write_audit(question, role, response, residual_pii)
             return response
 
-        # [5] Catena LCEL.
+        # [5] Catena LCEL, e [6] output guard — che con lo streaming si intrecciano.
         passo("Generazione della risposta")
-        raw_answer = self._chain.invoke({"context": context, "question": question})
         prompt_sent = self._prompt.format(context=context, question=question)
 
-        # [6] Output guard.
-        passo("Verifica della risposta")
-        output_verdict = validate_output(raw_answer, context_used=context, masker=self._masker)
+        if on_token is None:
+            raw_answer = self._chain.invoke({"context": context, "question": question})
+            passo("Verifica della risposta")
+            output_verdict = validate_output(raw_answer, context_used=context, masker=self._masker)
+        else:
+            raw_answer, output_verdict = self._genera_in_streaming(
+                context, question, role, on_token
+            )
+            passo("Verifica della risposta")
         if output_verdict.blocked:
             raw_answer = (
                 "Risposta bloccata dal layer di sicurezza prima della consegna.\n"
@@ -379,6 +386,42 @@ class SecureRAGPipeline:
         # [7] Audit.
         self._write_audit(question, role, response, residual_pii)
         return response
+
+    def _genera_in_streaming(
+        self,
+        context: str,
+        question: str,
+        role: str,
+        on_token: Callable[[str], None],
+    ) -> tuple[str, GuardVerdict]:
+        """Genera la risposta mostrandola man mano, **senza mostrare nulla di non verificato**.
+
+        Il testo passa da `StreamingOutputGuard`, che rilascia solo ciò che ha già superato i
+        controlli su dati personali e cifre inventate. Quello che arriva a `on_token` è quindi
+        materiale approvato: se un controllo scatta a metà, il resto semplicemente non esce.
+
+        La de-pseudonimizzazione (passo 6b) si applica qui a ciascun pezzo rilasciato, e non prima:
+        vale lo stesso ragionamento del percorso non in streaming — il guard deve vedere i
+        segnaposto, non i valori reali, altrimenti scatterebbe sui dati che abbiamo sostituito noi.
+        """
+        guard = StreamingOutputGuard(context, self._masker)
+        ripristina = self._puo_ripristinare(role)
+
+        def consegna(pezzo: str) -> None:
+            if pezzo:
+                on_token(self._masker.unmask(pezzo) if ripristina else pezzo)
+
+        for chunk in self._chain.stream({"context": context, "question": question}):
+            consegna(guard.feed(chunk))
+            if guard.blocked:
+                break
+
+        coda, verdetto = guard.close()
+        consegna(coda)
+
+        # Il testo restituito resta con i segnaposto: il ripristino sul testo completo avviene nel
+        # percorso comune, così esiste un solo punto in cui il passo 6b è scritto.
+        return guard.testo_completo, verdetto
 
     def _puo_ripristinare(self, role: str) -> bool:
         """Se questo ruolo può vedere i dati reali al posto dei segnaposto.

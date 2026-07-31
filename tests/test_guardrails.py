@@ -7,10 +7,13 @@ from langchain_core.documents import Document
 
 from secure_rag.security.guardrails import (
     MAX_QUERY_LENGTH,
+    StreamingOutputGuard,
+    _CODA_SICURA,
     scan_context,
     validate_input,
     validate_output,
 )
+from secure_rag.security.pii import PIIMasker
 
 # --------------------------------------------------------------------- input
 
@@ -181,3 +184,87 @@ def test_la_stessa_cifra_scritta_in_modo_diverso_resta_ancorata():
         "Il massimale ammonta a 5000000 EUR e la franchigia a 250 EUR.",
         context_used=CONTESTO_MASSIMALE,
     ).allowed
+
+
+# --------------------------------- output guard applicato durante lo streaming
+
+
+CONTESTO_STREAM = (
+    "[fonte: perizia.md]\n"
+    "SEZIONE 3 — l'Assicurato ha diritto all'indennizzo. "
+    "Massimale 5.000.000 EUR, franchigia 250 EUR. La denuncia va inoltrata entro 72 ore."
+)
+
+
+def _streamma(guard: StreamingOutputGuard, testo: str, passo: int = 7) -> str:
+    """Simula l'arrivo del testo a pezzetti, come farebbe il modello."""
+    mostrato = ""
+    for inizio in range(0, len(testo), passo):
+        mostrato += guard.feed(testo[inizio : inizio + passo])
+    coda, _ = guard.close()
+    return mostrato + coda
+
+
+def test_lo_streaming_mostra_tutta_una_risposta_valida():
+    guard = StreamingOutputGuard(CONTESTO_STREAM, PIIMasker())
+    risposta = (
+        "Il massimale è di 5.000.000 EUR, con franchigia di 250 EUR. "
+        "In pratica: i primi 250 EUR restano a carico dell'assicurato. "
+        "📄 perizia.md — SEZIONE 3"
+    )
+
+    assert _streamma(guard, risposta) == risposta
+    assert guard.verdict is not None and guard.verdict.allowed
+
+
+def test_una_cifra_inventata_ferma_lo_stream_prima_di_mostrarla():
+    """È la richiesta esplicita: niente numeri inventati **a schermo**, non «tolti dopo»."""
+    guard = StreamingOutputGuard(CONTESTO_STREAM, PIIMasker())
+
+    mostrato = _streamma(
+        guard, "Il massimale è di 99.000.000 EUR. È indicato nella sezione 3 della perizia."
+    )
+
+    assert "99.000.000" not in mostrato
+    assert guard.blocked
+    assert guard.verdict.rule == "risposta_non_ancorata"
+
+
+def test_un_dato_personale_non_raggiunge_lo_schermo():
+    guard = StreamingOutputGuard(CONTESTO_STREAM, PIIMasker())
+
+    mostrato = _streamma(
+        guard,
+        "Il contraente è identificato dal codice fiscale FRRMRC80E15F205K. "
+        "Il massimale resta di 5.000.000 EUR.",
+    )
+
+    assert "FRRMRC80E15F205K" not in mostrato
+    assert guard.blocked
+    assert guard.verdict.rule == "pii_in_output"
+
+
+def test_una_cifra_spezzata_fra_due_pezzi_non_genera_un_falso_blocco():
+    """Il difetto che lo streaming può introdurre da sé: `5.000` verificato prima di diventare
+    `5.000.000`, e una risposta corretta bloccata da un artefatto della trasmissione.
+    """
+    guard = StreamingOutputGuard(CONTESTO_STREAM, PIIMasker())
+
+    # Un carattere alla volta: il caso peggiore possibile.
+    mostrato = _streamma(guard, "Il massimale è di 5.000.000 EUR per sinistro.", passo=1)
+
+    assert not guard.blocked
+    assert "5.000.000" in mostrato
+
+
+def test_niente_viene_rilasciato_dentro_la_coda_di_sicurezza():
+    """La garanzia strutturale: un pattern non può essere mostrato a metà, quando ancora non
+    corrisponde ad alcuna regola e quindi nessun controllo lo vedrebbe.
+    """
+    guard = StreamingOutputGuard(CONTESTO_STREAM, PIIMasker())
+    testo = "Prima frase. " * 20
+
+    mostrato = ""
+    for pezzo in [testo[i : i + 5] for i in range(0, len(testo), 5)]:
+        mostrato += guard.feed(pezzo)
+        assert len(guard.testo_completo) - len(mostrato) >= _CODA_SICURA or not mostrato

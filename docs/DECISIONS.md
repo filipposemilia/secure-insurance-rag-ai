@@ -573,3 +573,54 @@ intercettata solo dalla soglia lessicale, che è debole per costruzione.
 La lezione generale, che vale oltre questo controllo: **una misura proxy va verificata sui due lati**.
 Questa era stata provata solo sul caso «risposta inventata bloccata», mai sul caso «risposta corretta
 ammessa» né su «numero alterato bloccato», e per mesi ha protetto meno di quanto sembrasse.
+
+---
+
+## ADR-023 — Streaming reale senza mostrare testo non verificato
+
+**Contesto.** Mostrare la risposta mentre viene generata è ciò che fa sembrare vivo un assistente. Ma
+lo streaming ingenuo manda in pagina i token appena il modello li produce, cioè **prima** dell'output
+guard: un massimale inventato o un codice fiscale rigenerato sarebbero già stati letti quando il
+guard interviene, e ritirarli dopo non li fa dimenticare a chi li ha visti. Il progetto dichiara che
+l'output guard blocca *prima della consegna*: con lo streaming ingenuo quella frase diventerebbe
+falsa.
+
+La prima versione aggirava il problema: rivelazione progressiva del testo **già verificato**. Onesta,
+ma non era streaming — la latenza restava tutta all'inizio.
+
+**L'osservazione che scioglie il nodo.** I controlli non hanno bisogno della risposta intera. Un
+codice fiscale e una cifra inventata si riconoscono su un frammento esattamente come sul testo
+completo. Quello che serve non è aspettare la fine: è **non rilasciare mai un frammento prima di
+averlo verificato**.
+
+**Decisione.** `StreamingOutputGuard` in `security/guardrails.py` si interpone fra il modello e lo
+schermo:
+
+1. Il testo si accumula in un buffer e viene **rivalidato per intero** a ogni rilascio, non solo
+   nella parte nuova.
+2. Gli ultimi **96 caratteri non vengono mai rilasciati**. La coda è più lunga del più esteso
+   pattern riconosciuto (l'indirizzo, ~60 caratteri), quindi qualunque dato personale è per intero
+   dentro al buffer — e quindi già verificato — prima che il suo primo carattere superi il confine.
+   È questo a rendere la garanzia strutturale invece che probabile.
+3. Il rilascio avviene per **frasi**: un testo che compare a metà parola si legge peggio.
+4. Se un controllo scatta, il rilascio si ferma. Ciò che è a schermo ha superato i controlli; il
+   resto non compare, e l'interfaccia sostituisce il parziale con il messaggio di blocco — una
+   risposta troncata sarebbe fuorviante anche se innocua.
+
+**Alternative scartate.** *Streaming diretto con ritiro a posteriori*: è la soluzione comune, e
+rinuncia esattamente alla proprietà che questo progetto dichiara. *Nessuno streaming*: era la
+versione precedente, corretta ma meno viva. *Controllare solo i pezzi nuovi invece dell'intero
+buffer*: più veloce, ma un pattern a cavallo di due frammenti non verrebbe visto da nessuna delle
+due verifiche.
+
+**Conseguenze.** Un difetto che lo streaming poteva introdurre da sé è stato chiuso in fase di
+scrittura: una cifra ancora in formazione — `5.000` che diventerà `5.000.000` — risultava assente dal
+contesto e faceva scattare un blocco su una risposta corretta. Le cifre che toccano la fine del
+buffer sono quindi escluse dal confronto, e c'è un test che invia la risposta **un carattere alla
+volta**, cioè il caso peggiore possibile.
+
+Resta a posteriori un solo controllo, ed è dichiarato: la **soglia lessicale** di groundedness ha
+senso solo sul testo completo — su tre parole qualunque rapporto è rumore — quindi si applica alla
+chiusura. È il controllo debole, quello contro le risposte inventate di sana pianta; i due che
+riguardano dati personali e cifre sono preventivi. Il motore offline, che produce la risposta in un
+blocco solo, attraversa lo stesso guard senza differenze di comportamento.

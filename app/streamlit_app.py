@@ -15,7 +15,7 @@ Avvio:  streamlit run app/streamlit_app.py
 from __future__ import annotations
 
 import sys
-import time
+from contextlib import nullcontext
 from pathlib import Path
 from uuid import uuid4
 
@@ -361,32 +361,11 @@ with st.sidebar:
 # ---------------------------------------------------------------------------
 
 
-def rivela_progressivamente(testo: str, ritardo: float = 0.012):
-    """Fa comparire la risposta parola per parola, come se venisse scritta.
-
-    **Non è streaming del modello, ed è una scelta di sicurezza, non un limite tecnico.** Lo
-    streaming vero manda in pagina i token man mano che il modello li produce, cioè *prima*
-    dell'output guard: un dato personale rigenerato dal modello o un massimale inventato sarebbero
-    già stati letti quando il guard interviene, e ritirarli dopo non li fa dimenticare a chi li ha
-    visti. Il progetto dichiara che l'output guard blocca **prima della consegna**, e quella frase
-    deve restare vera.
-
-    Qui il testo è già stato verificato: la rivelazione progressiva dà lo stesso ritmo di lettura
-    senza spostare il confine. L'attesa vera è coperta dall'avanzamento dei passi di sicurezza, che
-    è informazione utile invece che un'animazione.
-    """
-    for indice, parola in enumerate(testo.split(" ")):
-        yield parola + " "
-        if indice % 3 == 0:
-            time.sleep(ritardo)
-
-
-def render_response(response: RAGResponse, reveal: bool = False) -> None:
+def render_response(response: RAGResponse, answer_shown: bool = False) -> None:
     """Mostra risposta, esiti di sicurezza e fonti.
 
-    `reveal` distingue una risposta appena prodotta — che compare progressivamente — da una
-    ripescata dallo storico, che deve comparire subito: rianimare ogni risposta a ogni rerun di
-    Streamlit sarebbe fastidioso, non vivo.
+    `answer_shown` dice che il testo è già comparso durante lo streaming: qui resta da mostrare
+    tutto il resto, e ristamparlo raddoppierebbe la risposta.
     """
     if response.rate_limit == "quota_globale":
         st.info(
@@ -398,12 +377,7 @@ def render_response(response: RAGResponse, reveal: bool = False) -> None:
 
     if response.blocked:
         st.error(response.answer, icon="🛑")
-    elif reveal:
-        # Rivelazione progressiva: il testo compare mentre si legge, invece di apparire tutto
-        # insieme dopo l'attesa. Arriva **dopo** l'output guard, mai durante la generazione — si
-        # veda la nota in `rivela_progressivamente`.
-        st.write_stream(rivela_progressivamente(response.answer))
-    else:
+    elif not answer_shown:
         st.markdown(response.answer)
 
     # Il verdetto di sicurezza prima dei numeri: è la riga che conta per chi legge, e i quattro
@@ -462,7 +436,12 @@ def render_response(response: RAGResponse, reveal: bool = False) -> None:
             st.code(response.prompt_sent, language="markdown")
 
 
-def run_query(question: str, scope: str, as_role: str | None = None) -> RAGResponse:
+def run_query(
+    question: str,
+    scope: str,
+    as_role: str | None = None,
+    stream: bool = True,
+) -> RAGResponse:
     """Esegue una domanda applicando l'intera pipeline di sicurezza.
 
     `as_role` permette a uno scenario di girare con il **proprio** ruolo invece che con quello
@@ -506,24 +485,53 @@ def run_query(question: str, scope: str, as_role: str | None = None) -> RAGRespo
     # Tetto giornaliero raggiunto: si risponde comunque, ma senza spendere token.
     provider_effettivo = "fake" if verdetto.degraded else provider
 
-    # I passi compaiono mentre avvengono: l'attesa diventa il racconto di ciò che il sistema sta
-    # facendo, che è poi la cosa che questo progetto vuole mostrare.
-    with st.status("Controlli di sicurezza in corso…", expanded=True) as stato:
+    # I passi compaiono mentre avvengono, e il testo mentre viene generato. Il contenitore della
+    # risposta sta sotto lo stato, così quando questo si richiude il testo resta al suo posto.
+    # `stream=False` serve dove la risposta viene mostrata **altrove**, come negli scenari: il
+    # testo comparirebbe dentro la scheda del pulsante e poi di nuovo sotto, in «Esito».
+    stato = st.status("Controlli di sicurezza in corso…", expanded=True) if stream else None
+    contenitore = st.empty() if stream else None
+    pezzi: list[str] = []
+
+    def mostra(pezzo: str) -> None:
+        """Riceve dalla pipeline solo testo già verificato: si può scrivere a schermo così com'è."""
+        pezzi.append(pezzo)
+        contenitore.markdown("".join(pezzi))  # type: ignore[union-attr]
+
+    # Senza streaming non c'è testo che compare: serve almeno un segnale che qualcosa sta girando.
+    attesa = st.spinner("Controlli di sicurezza in corso…") if not stream else nullcontext()
+    with attesa:
         response = get_pipeline(provider_effettivo).answer(
             question,
             role=ruolo_effettivo,
             scope=scope,
             rate_limit=verdetto.rule,
-            # I documenti caricati vivono in una collection per sessione, e la pipeline non conosce
-            # la sessione: senza questo passaggio cercherebbe in quella condivisa, che resta vuota.
+            # I documenti caricati vivono in una collection per sessione, e la pipeline non
+            # conosce la sessione: senza questo passaggio cercherebbe in quella condivisa, vuota.
             upload_collection=upload_settings(settings).collection_name,
-            on_step=lambda descrizione: stato.write(f"✓ {descrizione}"),
+            on_step=(lambda descrizione: stato.write(f"✓ {descrizione}")) if stato else None,
+            on_token=mostra if stream else None,
         )
+    if stato is not None:
         stato.update(
             label=f"Sette controlli attraversati in {response.latency_ms / 1000:.1f} s",
             state="complete",
             expanded=False,
         )
+
+    if not stream:
+        st.session_state["risposta_gia_mostrata"] = False
+    elif response.blocked:
+        # Ciò che era comparso aveva superato i controlli, ma una risposta troncata sarebbe
+        # fuorviante: il contenitore lascia il posto al messaggio di blocco.
+        contenitore.empty()  # type: ignore[union-attr]
+    else:
+        # La versione definitiva può contenere aggiunte successive alla generazione, come la nota
+        # di quarantena: si riscrive il contenitore invece di lasciare il testo dei soli pezzi.
+        contenitore.markdown(response.answer)  # type: ignore[union-attr]
+
+    if stream:
+        st.session_state["risposta_gia_mostrata"] = not response.blocked
 
     # La quota si consuma solo se il modello in rete è stato davvero interrogato. `prompt_sent` è
     # popolato unicamente quando la catena LCEL viene invocata: resta vuoto sia per le query
@@ -541,7 +549,7 @@ def ask(question: str, scope: str) -> None:
         st.write(question)
     with st.chat_message("assistant"):
         response = run_query(question, scope)
-        render_response(response, reveal=True)
+        render_response(response, answer_shown=st.session_state.pop("risposta_gia_mostrata", False))
     st.session_state["history"].append({"question": question, "response": response})
 
 
@@ -878,7 +886,7 @@ with tab_docs:
             response = run_query(domanda, scope="uploads")
             st.session_state["history"].append({"question": domanda, "response": response})
             st.markdown("**Esito**")
-            render_response(response, reveal=True)
+            render_response(response, answer_shown=st.session_state.pop("risposta_gia_mostrata", False))
 
         if st.button("Elimina tutti i miei documenti"):
             reset_collection(upload_settings(settings))
@@ -927,7 +935,10 @@ with tab_security:
                         "question": scenario.question,
                         "expected": scenario.expected,
                         "response": run_query(
-                            scenario.question, scope="corpus", as_role=scenario.role
+                            scenario.question,
+                            scope="corpus",
+                            as_role=scenario.role,
+                            stream=False,
                         ),
                     }
 

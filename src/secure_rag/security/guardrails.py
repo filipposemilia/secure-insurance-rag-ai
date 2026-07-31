@@ -235,19 +235,160 @@ def validate_output(answer: str, context_used: str = "", masker: PIIMasker | Non
     return GuardVerdict(True, "output_ok", "Nessun dato personale in chiaro, risposta ancorata al contesto.")
 
 
+# Fine di una frase: punto, punto e virgola, due punti o a capo, seguiti da spazio o fine testo.
+# È l'unità con cui il guard rilascia il testo durante lo streaming.
+_FINE_FRASE_RE = re.compile(r"(?<=[.;:!?])\s+|\n+")
+
+# Caratteri finali del buffer che non vengono mai rilasciati durante lo streaming. Va tenuta più
+# lunga del più esteso pattern riconosciuto — l'indirizzo, che con nome di via e civico arriva
+# intorno ai sessanta caratteri — perché nessun dato personale possa essere mostrato a metà,
+# quando ancora non corrisponde ad alcuna regola.
+_CODA_SICURA = 96
+
+
+class StreamingOutputGuard:
+    """Output guard applicato **mentre** la risposta viene generata.
+
+    Serve a tenere insieme due proprietà che sembrano incompatibili: mostrare il testo man mano che
+    arriva, e non mostrare mai testo non verificato. Lo streaming ingenuo le rompe — manda in pagina
+    i token appena il modello li produce, quindi *prima* di qualunque controllo, e un massimale
+    inventato o un codice fiscale rigenerato sono già stati letti quando il guard interviene.
+    Ritirarli dopo non li fa dimenticare a chi li ha visti.
+
+    L'osservazione che scioglie il nodo: **i controlli non hanno bisogno della risposta intera.**
+    Un dato personale e una cifra inventata si riconoscono su un frammento esattamente come sul
+    testo completo. Quello che serve è non rilasciare mai un frammento prima di averlo verificato.
+
+    Come funziona:
+
+    1. Il testo che arriva si accumula in un buffer, e a ogni frase completata **l'intero buffer**
+       viene rivalidato — non solo la parte nuova.
+    2. Gli ultimi `_CODA_SICURA` caratteri non vengono **mai** rilasciati. È il dettaglio che rende
+       la garanzia solida invece che probabile: la coda è più lunga del più lungo pattern
+       riconosciuto, quindi qualunque dato personale è per intero dentro al buffer — e quindi già
+       verificato — prima che il suo primo carattere superi il confine del rilascio.
+    3. Si rilascia per frasi, non per caratteri: un testo che compare a metà parola si legge peggio
+       di uno che compare a piccoli blocchi.
+    4. Se un controllo scatta, il rilascio si ferma lì. Ciò che è già a schermo ha superato i
+       controlli; il resto non compare.
+
+    **Cosa resta a posteriori, e va detto:** la soglia lessicale di groundedness ha senso solo sul
+    testo completo — su tre parole qualunque rapporto è rumore — quindi viene applicata alla
+    chiusura. È il controllo debole, quello contro le risposte inventate di sana pianta; i due che
+    riguardano dati personali e cifre sono preventivi.
+    """
+
+    def __init__(self, context: str, masker: PIIMasker | None = None) -> None:
+        self._context = context
+        self._masker = masker or build_masker()
+        self._numeri_contesto = _numeri(context)
+        self._buffer = ""
+        self._rilasciato = 0
+        self.verdict: GuardVerdict | None = None
+
+    @property
+    def blocked(self) -> bool:
+        return self.verdict is not None and self.verdict.blocked
+
+    @property
+    def testo_completo(self) -> str:
+        """Tutto ciò che il modello ha prodotto, rilasciato o no."""
+        return self._buffer
+
+    def feed(self, chunk: str) -> str:
+        """Aggiunge un pezzo generato e restituisce il testo che può essere mostrato.
+
+        Restituisce stringa vuota finché non c'è una frase interamente verificata da rilasciare.
+        """
+        if self.blocked:
+            return ""
+
+        self._buffer += chunk
+
+        # Confine del rilascio: mai dentro alla coda di sicurezza.
+        frontiera = len(self._buffer) - _CODA_SICURA
+        fine = max(
+            (posizione for posizione in self._frasi_complete() if posizione <= frontiera),
+            default=0,
+        )
+        if fine <= self._rilasciato:
+            return ""
+
+        verdetto = self._verifica_preventiva(self._buffer)
+        if verdetto is not None:
+            self.verdict = verdetto
+            return ""
+
+        emesso = self._buffer[self._rilasciato : fine]
+        self._rilasciato = fine
+        return emesso
+
+    def close(self) -> tuple[str, GuardVerdict]:
+        """Chiude lo stream: verifica il testo completo e restituisce la coda non ancora rilasciata."""
+        if self.blocked:
+            return "", self.verdict  # type: ignore[return-value]
+
+        verdetto = validate_output(self._buffer, context_used=self._context, masker=self._masker)
+        self.verdict = verdetto
+        if verdetto.blocked:
+            return "", verdetto
+
+        coda = self._buffer[self._rilasciato :]
+        self._rilasciato = len(self._buffer)
+        return coda, verdetto
+
+    # -------------------------------------------------------------- interni
+
+    def _frasi_complete(self) -> list[int]:
+        """Posizioni di fine delle frasi concluse, esclusa quella ancora in formazione."""
+        return [trovato.end() for trovato in _FINE_FRASE_RE.finditer(self._buffer)]
+
+    def _verifica_preventiva(self, testo: str) -> GuardVerdict | None:
+        """I due controlli che non richiedono la risposta intera. `None` se il testo può passare."""
+        leaked = self._masker.detect(testo)
+        if leaked:
+            tipi = sorted({entita.entity_type for entita in leaked})
+            return GuardVerdict(
+                False,
+                "pii_in_output",
+                "La risposta contiene dati personali in chiaro: interrotta prima della consegna "
+                f"(tipi rilevati: {', '.join(tipi)}).",
+                matches=tipi,
+            )
+
+        # Una cifra che tocca la fine del buffer può essere ancora in formazione: «5.000» che
+        # diventerà «5.000.000». Bloccarla sarebbe un falso positivo generato dallo streaming
+        # stesso, cioè il difetto peggiore che questo meccanismo potesse introdurre.
+        inventate = _numeri(testo, ignora_finale=True) - self._numeri_contesto
+        if inventate:
+            return GuardVerdict(
+                False,
+                "risposta_non_ancorata",
+                "La risposta contiene cifre che non compaiono nei documenti recuperati "
+                f"({', '.join(sorted(inventate))}): interrotta prima della consegna.",
+                matches=sorted(inventate),
+            )
+        return None
+
+
 # Cifre della risposta, con i separatori italiani di migliaia e decimali.
 _NUMERI_RE = re.compile(r"\d[\d.,]*")
 
 
-def _numeri(testo: str) -> set[str]:
+def _numeri(testo: str, ignora_finale: bool = False) -> set[str]:
     """Valori numerici normalizzati, per confrontarli a prescindere dalla formattazione.
 
     `5.000.000`, `5000000` e `5.000.000,00` devono risultare lo stesso valore: è la stessa cifra
     scritta in tre modi, e un controllo che li distinguesse bloccherebbe risposte corrette.
+
+    `ignora_finale` scarta una cifra che tocca la fine del testo: serve durante lo streaming, dove
+    il testo è un frammento e l'ultima cifra può non essere ancora finita.
     """
     trovati = set()
-    for grezzo in _NUMERI_RE.findall(testo):
-        pulito = grezzo.rstrip(".,").replace(".", "").replace(",", "")
+    for trovato in _NUMERI_RE.finditer(testo):
+        if ignora_finale and trovato.end() == len(testo):
+            continue
+        pulito = trovato.group(0).rstrip(".,").replace(".", "").replace(",", "")
         if pulito:
             trovati.add(pulito.lstrip("0") or "0")
     return trovati

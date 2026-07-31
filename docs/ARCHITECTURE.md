@@ -107,7 +107,7 @@ differenza fra una difesa che fa risparmiare e una che fa solo evitare il danno.
 | 3 | Context guard | `security/guardrails.py` | Prompt injection **indiretta**: istruzioni nascoste nei documenti indicizzati o caricati. |
 | 4 | PII guard sul contesto | `security/pii.py`, `security/ner.py` | Rete di sicurezza sui chunk, **e mascheramento dei metadati** — numero di polizza *e nome del file*: vivono lì e non passano dall'anonimizzazione dell'ingestion. Sui metadati gira il solo livello 1 (ADR-020, punto 7). |
 | 5 | Catena LCEL | `rag.py` | Allucinazioni: delimitatori rigidi, obbligo di citare la fonte, `temperature=0`. |
-| 6 | Output guard | `security/guardrails.py` | Fuga di dati personali in risposta e risposte non ancorate al contesto. |
+| 6 | Output guard | `security/guardrails.py` | Fuga di dati personali in risposta e risposte non ancorate al contesto. Con lo streaming il controllo è **interposto**, non successivo: `StreamingOutputGuard` rilascia solo il testo già verificato, trattenendo sempre una coda più lunga del più esteso pattern (ADR-023). |
 | 6b | Ripristino | `rag.py`, `security/vault.py` | Nulla: è un passo di usabilità, non di sicurezza. Attivo solo con vault configurato e per i ruoli in `UNMASK_ROLES`. |
 | 7 | Audit | `security/audit.py` | Impossibilità di ricostruire chi ha chiesto cosa e quali controlli sono scattati. |
 

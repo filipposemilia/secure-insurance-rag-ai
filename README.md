@@ -38,6 +38,7 @@ audit trail ricostruibile.
 | 🔌 | **Provider intercambiabile**: OpenAI, Azure OpenAI, Ollama on-premise, o `fake` per girare offline. | `.env` |
 | 📎 | **Upload di documenti in chat** con referto di sicurezza immediato: PII rimosse, confronto prima/dopo e rilevamento di istruzioni nascoste, prima ancora della prima domanda. | scheda **Documenti** |
 | ⏱️ | **Limiti di frequenza** sull'istanza pubblica: quota per visitatore e tetto di spesa giornaliero che **degrada al motore offline** invece di rifiutare le richieste. | `security/ratelimit.py` |
+| ⌨️ | **Streaming con il guard interposto**: la risposta compare mentre viene generata, ma un dato personale o una cifra inventata non raggiungono lo schermo — il controllo è *prima* del rilascio, non dopo. | `security/guardrails.py::StreamingOutputGuard` |
 
 ## L'interfaccia
 
@@ -96,7 +97,7 @@ dimensione diversa: 1536 per `text-embedding-3-small`, 256 per quello determinis
 provider nuovo va eseguito `ingest` una volta per quel provider; gli indici già costruiti restano
 validi e si può alternare senza re-indicizzare.
 
-Demo guidata: `bash scripts/demo.sh openai` (o `fake`). Test: `.venv/bin/pytest -q` — 153 test, tutti
+Demo guidata: `bash scripts/demo.sh openai` (o `fake`). Test: `.venv/bin/pytest -q` — 158 test, tutti
 offline, nessuna API key richiesta.
 
 ## Architettura
@@ -188,7 +189,7 @@ src/secure_rag/
 
 app/streamlit_app.py       UI demo a schede: chat, upload documenti, sicurezza
 data/policies/             4 documenti sintetici, uno deliberatamente compromesso
-tests/                     153 test, nessuna chiamata di rete
+tests/                     158 test, nessuna chiamata di rete
 ```
 
 ## Deploy
