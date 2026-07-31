@@ -162,11 +162,22 @@ class SecureRAGPipeline:
     def audit(self) -> AuditLogger:
         return self._audit
 
-    def retrieve(self, question: str, role: str, scope: SearchScope) -> list[Document]:
+    def retrieve(
+        self,
+        question: str,
+        role: str,
+        scope: SearchScope,
+        upload_collection: str = "",
+    ) -> list[Document]:
         """Recupera i chunk dalle collection previste dallo scope, sempre filtrati per ruolo.
 
         Il filtro RBAC è applicato a ogni collection, inclusa quella dei documenti caricati: un
         file caricato da un utente `management` non diventa visibile a un `agent`.
+
+        `upload_collection` **deve** essere indicata da chi serve più visitatori, perché i documenti
+        caricati vivono in una collection per sessione (ADR-015) e la pipeline non conosce la
+        sessione: non sa di essere dietro un'interfaccia web, ed è voluto. Omettendola si interroga
+        la collection condivisa, che è il caso dell'uso locale a utente singolo.
         """
         documents: list[Document] = []
 
@@ -175,7 +186,7 @@ class SecureRAGPipeline:
 
         if scope in ("uploads", "both"):
             upload_settings = self._settings.with_collection(
-                self._settings.upload_collection_name
+                upload_collection or self._settings.upload_collection_name
             )
             if collection_size(upload_settings) > 0:
                 documents.extend(get_retriever(role, upload_settings).invoke(question))
@@ -188,6 +199,7 @@ class SecureRAGPipeline:
         role: str = "agent",
         scope: SearchScope = "corpus",
         rate_limit: str = "",
+        upload_collection: str = "",
     ) -> RAGResponse:
         """Esegue una richiesta completa applicando tutti i controlli.
 
@@ -222,7 +234,7 @@ class SecureRAGPipeline:
             return response
 
         # [2] Retrieval con filtro RBAC, sulle collection previste dallo scope.
-        retrieved = self.retrieve(question, role, scope)
+        retrieved = self.retrieve(question, role, scope, upload_collection)
 
         # [3] Context guard: neutralizza la injection indiretta nascosta nei documenti.
         scan = scan_context(retrieved)

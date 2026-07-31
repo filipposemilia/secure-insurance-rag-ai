@@ -10,7 +10,8 @@ import pytest
 from secure_rag.config import Settings
 from secure_rag.ingestion import allowed_clearances, build_documents
 from secure_rag.rag import SecureRAGPipeline
-from secure_rag.vectorstore import index_documents
+from secure_rag.uploads import process_upload
+from secure_rag.vectorstore import add_documents, index_documents
 
 
 @pytest.fixture(scope="module")
@@ -132,3 +133,70 @@ def test_l_audit_non_conserva_la_domanda_in_chiaro(pipeline: SecureRAGPipeline):
 
     contenuto = pipeline.audit.path.read_text(encoding="utf-8")
     assert domanda not in contenuto
+
+
+# ------------------------------------- documenti caricati e collection di sessione
+
+
+POLIZZA_CARICATA = (
+    "SEZIONE 3 — l'Assicurato ha diritto all'indennizzo. "
+    "Massimale 5.000.000 EUR, franchigia 250 EUR."
+)
+
+
+@pytest.fixture
+def sessione_con_upload(settings: Settings) -> tuple[SecureRAGPipeline, str]:
+    """Un documento caricato, indicizzato dove lo mette davvero l'interfaccia.
+
+    Riproduce il percorso dell'app: `upload_collection_for(session_id)`, non la collection
+    condivisa. È la differenza che il bug sfruttava per restare invisibile ai test.
+    """
+    collection = settings.upload_collection_for("sessione-di-prova")
+    documenti, report = process_upload(
+        "perizia.md", POLIZZA_CARICATA.encode("utf-8"), clearance="agent", settings=settings
+    )
+    assert report.accepted
+    add_documents(documenti, settings.with_collection(collection))
+    return SecureRAGPipeline(settings), collection
+
+
+def test_una_domanda_sui_documenti_caricati_li_trova(sessione_con_upload):
+    """Regressione: l'app indicizzava in `<collection>_uploads_<sessione>` e la pipeline
+    interrogava `<collection>_uploads`. Il retrieval tornava sempre vuoto, e l'utente riceveva
+    «Informazione non presente» in 0.0 s — senza che alcun modello fosse mai stato interrogato.
+    """
+    pipeline, collection = sessione_con_upload
+
+    risposta = pipeline.answer(
+        "Qual è il massimale?", role="agent", scope="uploads", upload_collection=collection
+    )
+
+    assert risposta.sources, "nessuna fonte: il retrieval non ha raggiunto la collection di sessione"
+    assert "perizia.md" in risposta.sources
+    assert risposta.prompt_sent, "il modello non è stato interrogato"
+    assert "5.000.000" in risposta.answer
+
+
+def test_senza_la_collection_di_sessione_non_si_trova_nulla(sessione_con_upload):
+    """Documenta il comportamento predefinito: la collection condivisa è quella dell'uso locale.
+
+    Serve a rendere esplicito che l'omissione del parametro **non** è equivalente, così il difetto
+    non può tornare in silenzio.
+    """
+    pipeline, _ = sessione_con_upload
+
+    risposta = pipeline.answer("Qual è il massimale?", role="agent", scope="uploads")
+
+    assert not risposta.sources
+    assert not risposta.prompt_sent
+
+
+def test_l_ambito_entrambi_unisce_corpus_e_sessione(sessione_con_upload):
+    pipeline, collection = sessione_con_upload
+
+    risposta = pipeline.answer(
+        "Qual è il massimale?", role="management", scope="both", upload_collection=collection
+    )
+
+    assert "perizia.md" in risposta.sources
+    assert len(risposta.sources) > 1, "l'ambito «entrambi» deve leggere anche il corpus"

@@ -468,7 +468,13 @@ def run_query(question: str, scope: str, as_role: str | None = None) -> RAGRespo
 
     with st.spinner("Elaborazione con controlli di sicurezza…"):
         response = get_pipeline(provider_effettivo).answer(
-            question, role=ruolo_effettivo, scope=scope, rate_limit=verdetto.rule
+            question,
+            role=ruolo_effettivo,
+            scope=scope,
+            rate_limit=verdetto.rule,
+            # I documenti caricati vivono in una collection per sessione, e la pipeline non conosce
+            # la sessione: senza questo passaggio cercherebbe in quella condivisa, che resta vuota.
+            upload_collection=upload_settings(settings).collection_name,
         )
 
     # La quota si consuma solo se il modello in rete è stato davvero interrogato. `prompt_sent` è
