@@ -267,6 +267,19 @@ di sessione entra in un nome di collection, quindi viene ripulito dei caratteri 
 Resta un limite: l'isolamento vale per sessione del browser, non per identità verificata — chi
 riapre il link ottiene una sessione nuova e vuota, che per una demo è il comportamento desiderabile.
 
+> **Il prezzo di questa decisione si è visto mesi dopo.** `rag.py::retrieve` cercava i documenti
+> caricati nella collection **condivisa**, quella di prima: l'app scriveva in un posto e la pipeline
+> leggeva in un altro, il retrieval tornava sempre vuoto e l'utente riceveva «Informazione non
+> presente» in 0,0 secondi. Nessun errore, nessun evento di sicurezza, nessun token speso: sembrava
+> una risposta. Nessun test lo vedeva, perché **tutti indicizzavano nella collection condivisa**, la
+> stessa che la pipeline interrogava — la fixture riproduceva il difetto invece di scoprirlo.
+>
+> Corretto passando il nome della collection dall'interfaccia (`answer(..., upload_collection=…)`)
+> invece di far leggere alla pipeline lo stato di sessione: la pipeline **non sa di avere
+> un'interfaccia davanti**, ed è la stessa ragione per cui non applica i limiti di frequenza. La
+> lezione sta nella fixture, non nel parametro: un test che scrive dove non scrive l'applicazione
+> resta verde su un sistema rotto.
+
 ---
 
 ## ADR-016 — Due livelli di lettura, e controlli da amministratore fuori dalla vetrina
