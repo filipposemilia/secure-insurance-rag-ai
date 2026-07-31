@@ -15,6 +15,12 @@ anagrafica, codice fiscale, IBAN, contatti, dati di sinistro.
 
 ## Mapping OWASP Top 10 for LLM Applications
 
+> Questa tabella è il testo discorsivo. La **forma strutturata** vive in `src/secure_rag/owasp.py`,
+> è ciò che la scheda 🛡️ Sicurezza mostra, ed è coperta da test: che i dieci codici ci siano tutti,
+> che ogni scenario dichiarato esista davvero, che ogni rischio non applicabile spieghi perché.
+> Prima esisteva solo la prosa, e la prosa aveva perso una riga senza che nessuno se ne accorgesse
+> (ADR-024).
+
 | Rischio | Mitigazione implementata | Dove | Limite dichiarato |
 | :--- | :--- | :--- | :--- |
 | **LLM01 — Prompt Injection (diretta)** | Input guard a pattern: override istruzioni, cambio ruolo, system override, jailbreak. Blocco prima della chiamata al modello. | `security/guardrails.py::validate_input` | Le regole sono deterministiche: un attacco riformulato con sinonimi o in altra lingua può eluderle. In produzione serve un classificatore addestrato. |
@@ -22,6 +28,7 @@ anagrafica, codice fiscale, IBAN, contatti, dati di sinistro.
 | **LLM02 — Insecure Output Handling** | La risposta non viene mai eseguita né interpretata: è testo mostrato in UI. Output guard su PII, applicato **anche durante lo streaming**: il testo compare mentre viene generato, ma solo dopo essere stato verificato (ADR-023). | `security/guardrails.py::validate_output`, `::StreamingOutputGuard` | Non c'è sanitizzazione HTML perché non esiste rendering di HTML generato dal modello. |
 | **LLM03 — Training Data Poisoning** | Non applicabile: nessun fine-tuning. È uno dei motivi per cui il RAG è preferibile in questo dominio. | — | Il corpus indicizzato **è** avvelenabile: è esattamente lo scenario coperto dal context guard. |
 | **LLM04 — Model Denial of Service** | Limite di lunghezza sulla query (`MAX_QUERY_LENGTH`), `k` di retrieval fisso, tetto di dimensione e di chunk sui file caricati, e **limiti di frequenza** sull'istanza pubblica: quota oraria per visitatore e tetto giornaliero complessivo. | `security/guardrails.py`, `uploads.py`, `security/ratelimit.py` | I contatori vivono nella memoria del processo: con più repliche servirebbe uno store condiviso. |
+| **LLM05 — Supply Chain Vulnerabilities** | Dipendenze dichiarate in `pyproject.toml`, immagine costruita da `python:3.12-slim`, e modello linguistico installato da un wheel con **versione fissata** nel Dockerfile invece che risolta al momento della build: due build a mesi di distanza producono la stessa immagine. | `pyproject.toml`, `Dockerfile` | È la voce più scoperta del mapping: nessuna verifica di firma, nessun SBOM, nessuna scansione delle vulnerabilità in integrazione continua. Non è nemmeno dimostrabile con uno scenario, perché è una proprietà della catena di costruzione e non un attacco a runtime. |
 | **LLM06 — Sensitive Information Disclosure** | PII masking **prima** dell'embedding: nel vector store non esiste un dato personale in chiaro. Coperti anche gli identificativi indiretti — numero di polizza, sinistro, targa, telaio — compreso quello nei metadati che compone il blocco fonte del prompt. RBAC sul retrieval. Output guard che blocca PII in risposta. Audit senza query in chiaro. | `security/pii.py`, `security/ner.py`, `rag.py::format_context`, `vectorstore.py`, `security/audit.py` | Il livello 1 è a regex, il livello 2 è a NER: entrambi attivi sull'istanza pubblica, il secondo opzionale nell'installazione da sorgente. Restano fuori in ogni caso i dati sanitari e giudiziari, che non sono entità ma affermazioni. Vedi la tabella di copertura GDPR più sotto. |
 | **LLM07 — Insecure Plugin Design** | Non applicabile: nessun tool né azione eseguibile dal modello. Il PoC è read-only per costruzione. | — | Con LangGraph e azioni di liquidazione servirebbe human-in-the-loop obbligatorio. |
 | **LLM08 — Excessive Agency** | Il modello non può compiere azioni: nessuna scrittura, nessuna approvazione, nessuna chiamata a sistemi terzi. Lo scenario 3 della demo mostra un documento che *chiede* di approvare 50.000 EUR e resta senza effetto. | Architettura | — |

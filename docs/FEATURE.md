@@ -87,8 +87,9 @@ va trattato come parte del perimetro invece che come il custode del perimetro.
 
 ## 4. Da read-only ad agentico, con l'approvazione umana come nodo esplicito
 
-Il sistema oggi è deliberatamente read-only: non compie azioni, ed è una delle ragioni per cui
-l'Excessive Agency (LLM08) non si applica. Passare a LangGraph significa rinunciare a quella
+Il sistema oggi è deliberatamente read-only: non compie azioni, ed è la ragione per cui l'Excessive
+Agency (LLM08) resta un rischio basso — basso per **ambito**, non perché sia stato reso sicuro.
+Passare a LangGraph significa rinunciare a quella
 proprietà in cambio di lavoro istruttorio automatizzato — bozze di liquidazione, raccolta dei
 documenti mancanti, verifica delle coperture.
 
@@ -117,7 +118,7 @@ browser, e attribuire una riga di audit a qualcuno invece che a un indirizzo IP.
 
 ## 6. Red teaming come test di regressione, non come esercizio
 
-I sei scenari della demo sono casi scelti a mano: servono a mostrare, non a misurare. Un sistema in
+I nove scenari della demo sono casi scelti a mano: servono a mostrare, non a misurare. Un sistema in
 esercizio ha bisogno di sapere se un aggiornamento del modello lo ha reso vulnerabile — e quello
 succede senza che nessuno tocchi il codice, perché la superficie di attacco di un LLM cambia quando
 cambia l'LLM.

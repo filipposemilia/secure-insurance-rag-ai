@@ -194,6 +194,12 @@ scenari 5 e 6 sono confrontabili con due click. Il ruolo di ciascuno scenario è
 scheda, così chi guarda vede che la differenza sta nella clearance e non nella domanda. La UI, che
 non era coperta da alcun test, ha ora cinque test di regressione in `tests/test_streamlit_ui.py`.
 
+> **Esteso da ADR-024.** Il ruolo proprio resta il valore di partenza, ma ogni scheda ha un selettore
+> per cambiarlo: è il default, non una gabbia. La proprietà che questo ADR protegge — 5 e 6
+> confrontabili senza toccare nulla — resta intatta, e quando il profilo scelto differisce da quello
+> dichiarato la scheda lo segnala, perché un esito che dipende da un menù cambiato per sbaglio non si
+> distingue da un esito che dipende dal sistema.
+
 ---
 
 ## ADR-013 — Al tetto di spesa si degrada, non si blocca
@@ -624,3 +630,49 @@ senso solo sul testo completo — su tre parole qualunque rapporto è rumore —
 chiusura. È il controllo debole, quello contro le risposte inventate di sana pianta; i due che
 riguardano dati personali e cifre sono preventivi. Il motore offline, che produce la risposta in un
 blocco solo, attraversa lo stesso guard senza differenze di comportamento.
+
+---
+
+## ADR-024 — Il catalogo OWASP vive nel codice, e i rischi non dimostrabili restano visibili
+
+**Contesto.** La scheda 🛡️ Sicurezza mostrava sei scenari che coprivano tre dei dieci rischi OWASP.
+Gli altri sette esistevano solo in `docs/SECURITY.md`, cioè in un file che chi prova la demo non
+apre: dall'interfaccia non c'era modo di sapere che la copertura fosse stata ragionata su tutti e
+dieci.
+
+Preparando il lavoro è emerso il difetto che rende la decisione necessaria. La stessa informazione
+viveva in **tre posti** — la tabella di `SECURITY.md`, quella del `README.md` e il campo `owasp`
+degli scenari in `cli.py` — e aveva già divergato: la tabella del modello di sicurezza aveva **dieci
+righe e nove codici**, perché `LLM01` compariva due volte e **`LLM05` non compariva mai**. Una
+lacuna che nessuno trova rileggendo, e che si vede solo contando.
+
+**Decisione.**
+
+1. **Catalogo unico in `src/secure_rag/owasp.py`**, con i dieci rischi in forma strutturata.
+   L'interfaccia lo mostra, i test lo verificano, `SECURITY.md` resta il testo discorsivo invece
+   della fonte dei dati. Gli scenari sono referenziati **per nome**, e un test controlla che ogni
+   nome esista davvero: se qualcuno rinomina uno scenario, il collegamento non si rompe in silenzio.
+2. **Tre stati, non due.** Non «coperto / non coperto», ma: rischio con attacco eseguibile; rischio
+   mitigato che **non si dimostra con un clic** (LLM05: la catena di fornitura non ha un attacco a
+   runtime); rischio che **non si applica** a questo sistema, con il motivo dichiarato.
+3. **I rischi non applicabili restano in pagina**, in grigio e senza pulsante. Riempire la griglia
+   con dieci pulsanti darebbe l'impressione di una copertura completa; chi verifica scoprirebbe che
+   tre di quei pulsanti dimostrano qualcos'altro, e a quel punto perderebbe fiducia anche nei sette
+   veri.
+
+**Alternative scartate.** *Uno scenario per ciascuno dei dieci*: per LLM03, LLM07 e LLM10 sarebbe
+stata una dimostrazione di altro travestita — l'assenza di un attacco non è una difesa da mostrare.
+*Lasciare la copertura completa alla sola documentazione*: è la situazione di partenza, e il difetto
+di `LLM05` mostra quanto duri.
+
+**Conseguenze.** Tre scenari nuovi coprono rischi che erano dimostrabili e non avevano un pulsante:
+LLM04 con una domanda oltre il limite di lunghezza, LLM08 con una richiesta di far agire il sistema,
+LLM09 con una domanda fuori dal corpus. Su LLM08 la scheda dichiara **entrambe** le ragioni per cui
+non succede nulla — la richiesta è fermata dall'input guard, e anche superandolo non esiste alcuno
+strumento da invocare — perché attribuirlo solo alla seconda sarebbe attribuire il merito al layer
+sbagliato.
+
+Lo scenario LLM09 ha un limite che vale la pena registrare: la formula di non-risposta è
+comportamento del **modello in rete**. Il motore offline risponde per sovrapposizione di parole e
+restituisce estratti attinenti. La proprietà che vale con entrambi — e che in una polizza è quella
+che conta — è che nessuna cifra sia inventata, ed è su quella che il test asserisce.

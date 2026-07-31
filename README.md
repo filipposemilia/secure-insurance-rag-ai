@@ -50,7 +50,8 @@ Tre schede, pensate per essere proiettate durante una discussione tecnica:
   rimosse e di che tipo, confronto affiancato fra testo originale e testo anonimizzato (è il
   secondo che viene indicizzato e inviato all'LLM), e segnalazione dei blocchi che contengono
   istruzioni rivolte all'assistente.
-- **🛡️ Sicurezza** — i sei scenari di attacco eseguibili con un clic, i **livelli di anonimizzazione
+- **🛡️ Sicurezza** — i **dieci rischi OWASP Top 10 for LLM** con, dove esiste un attacco eseguibile,
+  un pulsante e un selettore di profilo; i **livelli di anonimizzazione**
   attivi** su quell'istanza e l'audit trail in tabella.
 
 I documenti caricati vivono in una **collection separata e isolata per sessione**, con clearance
@@ -68,7 +69,7 @@ cp .env.example .env          # opzionale: aggiungi OPENAI_API_KEY per usare il 
 
 .venv/bin/secure-rag ingest         # anonimizza e indicizza
 .venv/bin/secure-rag ask "Qual è la franchigia della sezione cyber?"
-.venv/bin/secure-rag attack-demo    # i sei scenari di sicurezza
+.venv/bin/secure-rag attack-demo    # i nove scenari di sicurezza
 .venv/bin/streamlit run app/streamlit_app.py
 ```
 
@@ -97,7 +98,7 @@ dimensione diversa: 1536 per `text-embedding-3-small`, 256 per quello determinis
 provider nuovo va eseguito `ingest` una volta per quel provider; gli indici già costruiti restano
 validi e si può alternare senza re-indicizzare.
 
-Demo guidata: `bash scripts/demo.sh openai` (o `fake`). Test: `.venv/bin/pytest -q` — 158 test, tutti
+Demo guidata: `bash scripts/demo.sh openai` (o `fake`). Test: `.venv/bin/pytest -q` — 170 test, tutti
 offline, nessuna API key richiesta.
 
 ## Architettura
@@ -189,7 +190,7 @@ src/secure_rag/
 
 app/streamlit_app.py       UI demo a schede: chat, upload documenti, sicurezza
 data/policies/             4 documenti sintetici, uno deliberatamente compromesso
-tests/                     158 test, nessuna chiamata di rete
+tests/                     170 test, nessuna chiamata di rete
 ```
 
 ## Deploy

@@ -6,7 +6,7 @@
 | :--- | :--- | :--- |
 | 0 | Scaffolding, ambiente `uv` su Python 3.12, governance (log di sessione, ADR) | ✅ |
 | 1 | Core RAG: ingestion anonimizzata, ChromaDB con RBAC, provider intercambiabili, catena LCEL, CLI | ✅ |
-| 2 | Security layer: input guard, context guard (injection indiretta), output guard, audit trail JSONL, sei scenari di attacco | ✅ |
+| 2 | Security layer: input guard, context guard (injection indiretta), output guard, audit trail JSONL, scenari di attacco eseguibili | ✅ |
 | 3 | UI Streamlit a schede: chat con selettore di ambito, upload documenti con referto di sicurezza, pannello scenari e audit | ✅ |
 | 3b | Scelta interattiva del provider all'avvio (OpenAI / Ollama / offline) con rilevamento della disponibilità, indici separati per modello | ✅ |
 | 4 | Documentazione: README, architettura, modello di sicurezza con mapping OWASP, ADR | ✅ |
@@ -14,8 +14,8 @@
 | 6 | Anonimizzazione approfondita: identificativi indiretti dell'elenco GDPR, vault cifrato per la pseudonimizzazione reversibile | ✅ |
 | 7 | **Livello 2 dell'anonimizzazione**: Presidio + NER italiano affiancato alle regex, opzionale da sorgente e **attivo in produzione**, con fallback dichiarato e reindicizzazione automatica al cambio di livello (ADR-020, ADR-021) | ✅ |
 
-Test: 158, tutti offline (`.venv/bin/pytest -q`), inclusi quelli di regressione su interfaccia e
-limiti di frequenza. La suite gira identica con e senza Presidio installato: 158 verdi con, 155 più 3
+Test: 170, tutti offline (`.venv/bin/pytest -q`), inclusi quelli di regressione su interfaccia e
+limiti di frequenza. La suite gira identica con e senza Presidio installato: 170 verdi con, 167 più 3
 salti senza.
 
 **Cosa gira oggi in produzione.** La generazione usa **OpenAI `gpt-4o-mini`**, un modello esterno.
@@ -78,4 +78,4 @@ locale — perché cambia la classe di hardware necessaria.
 | Voce | Cosa aggiunge | Perché non ora | Sforzo |
 | :--- | :--- | :--- | :--- |
 | **Export dell'audit verso SIEM** | Correlazione degli eventi di sicurezza con il resto dell'infrastruttura | Il formato JSONL è già pronto per essere spedito | ~2 h |
-| **Suite di red teaming** | Batteria sistematica di attacchi con metriche di elusione | I sei scenari attuali sono casi scelti, non una suite statistica | ~1 g |
+| **Suite di red teaming** | Batteria sistematica di attacchi con metriche di elusione | I nove scenari attuali sono casi scelti, non una suite statistica | ~1 g |

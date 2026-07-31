@@ -31,6 +31,7 @@ from secure_rag.ingestion import (  # noqa: E402
     build_documents,
     write_index_stamp,
 )
+from secure_rag.owasp import OWASP_RISKS  # noqa: E402
 from secure_rag.providers import describe_provider, probe_providers  # noqa: E402
 from secure_rag.rag import RAGResponse, SecureRAGPipeline  # noqa: E402
 from secure_rag.security.audit import AuditRecord, hash_query, utc_now  # noqa: E402
@@ -908,44 +909,92 @@ with tab_docs:
 with tab_security:
     st.subheader("Mettilo alla prova")
     st.markdown(
-        "Sei tentativi di far sbagliare il sistema, eseguibili con un clic: chiedergli di "
-        "ignorare le regole, farsi dare dati personali, leggere documenti riservati. "
-        "**Ogni scenario si esegue con il profilo che gli è proprio**, indipendentemente da quello "
-        "scelto in barra laterale — è ciò che rende confrontabili il quinto e il sesto, che pongono "
-        "la stessa domanda con autorizzazioni diverse."
+        "I **dieci rischi della OWASP Top 10 for LLM Applications**, lo standard di settore per i "
+        "sistemi basati su modelli linguistici, e cosa fa questo sistema per ciascuno. Dove c'è un "
+        "attacco eseguibile trovi un pulsante; dove non c'è, trovi il motivo."
     )
     st.caption(
-        "Il riferimento accanto a ciascuno (LLM01, LLM06…) è la classificazione OWASP Top 10 for "
-        "LLM Applications, lo standard di settore per i rischi dei sistemi basati su modelli "
-        "linguistici."
+        "Ogni scenario parte dal **profilo che gli è proprio** — è ciò che rende confrontabili il "
+        "quinto e il sesto, che pongono la stessa domanda con autorizzazioni diverse — ma il "
+        "profilo si può cambiare per vedere come cambia l'esito."
     )
 
-    columns = st.columns(3)
-    for index, scenario in enumerate(SCENARIOS):
-        with columns[index % 3]:
+    scenari_per_nome = {scenario.name: scenario for scenario in SCENARIOS}
+    collegati = {nome for rischio in OWASP_RISKS for nome in rischio.scenari}
+
+    def scheda_scenario(scenario, chiave: str) -> None:
+        """Un riquadro di scenario: esito atteso, profilo modificabile, pulsante."""
+        st.markdown(f"**{scenario.name}**")
+        st.caption(f"Atteso: {scenario.expected}")
+
+        ruoli = list(ROLE_LABELS)
+        scelto = st.selectbox(
+            "Profilo",
+            options=ruoli,
+            index=ruoli.index(scenario.role),
+            format_func=lambda ruolo: ROLE_LABELS[ruolo],
+            key=f"ruolo_{chiave}",
+            label_visibility="collapsed",
+        )
+        if scelto != scenario.role:
+            # Un esito che dipende da un menù cambiato per sbaglio non si distingue da un esito che
+            # dipende dal sistema: va detto quale dei due si sta guardando.
+            st.caption(
+                f"⚠️ Profilo modificato — questo scenario è pensato per "
+                f"**{ROLE_LABELS[scenario.role]}**"
+            )
+
+        if st.button("Esegui", key=f"esegui_{chiave}", width="stretch"):
+            st.session_state["scenario_result"] = {
+                "name": scenario.name,
+                "question": scenario.question,
+                "expected": scenario.expected,
+                "role": scelto,
+                "response": run_query(
+                    scenario.question, scope="corpus", as_role=scelto, stream=False
+                ),
+            }
+
+    # Gli scenari che non appartengono a nessun rischio — il caso di riferimento — stanno sopra la
+    # griglia: senza un termine di paragone «bloccato» non significa nulla.
+    if riferimento := [s for s in SCENARIOS if s.name not in collegati]:
+        with st.container(border=True):
+            st.markdown("##### Il termine di paragone")
+            st.caption(
+                "Nessun attacco: una domanda legittima, per vedere come risponde il sistema quando "
+                "tutto è in ordine. Gli esiti degli scenari successivi si leggono rispetto a questo."
+            )
+            for scenario in riferimento:
+                scheda_scenario(scenario, chiave=f"base_{scenario.name}")
+
+    st.markdown("##### I dieci rischi")
+    colonne = st.columns(2)
+
+    for indice, rischio in enumerate(OWASP_RISKS):
+        with colonne[indice % 2]:
             with st.container(border=True):
-                st.markdown(f"**{scenario.name}**")
-                st.caption(f"Profilo usato: **{ROLE_LABELS.get(scenario.role, scenario.role)}**")
-                if scenario.owasp != "—":
-                    st.caption(f"Rischio: {scenario.owasp}")
-                st.caption(f"Esito atteso: {scenario.expected}")
-                if st.button("Esegui", key=f"scenario_{index}", width="stretch"):
-                    st.session_state["scenario_result"] = {
-                        "name": scenario.name,
-                        "question": scenario.question,
-                        "expected": scenario.expected,
-                        "response": run_query(
-                            scenario.question,
-                            scope="corpus",
-                            as_role=scenario.role,
-                            stream=False,
-                        ),
-                    }
+                if not rischio.applicabile:
+                    st.markdown(f"⚪ **{rischio.codice} — {rischio.titolo}**")
+                    st.caption("**Non applicabile a questo sistema**")
+                elif rischio.eseguibile:
+                    st.markdown(f"🟢 **{rischio.codice} — {rischio.titolo}**")
+                else:
+                    st.markdown(f"🔵 **{rischio.codice} — {rischio.titolo}**")
+                    st.caption("**Mitigato, ma non dimostrabile con un clic**")
+
+                st.caption(rischio.sintesi)
+                if rischio.nota:
+                    st.caption(f"↳ {rischio.nota}")
+
+                for nome in rischio.scenari:
+                    st.divider()
+                    scheda_scenario(scenari_per_nome[nome], chiave=f"{rischio.codice}_{nome}")
 
     if result := st.session_state.get("scenario_result"):
         st.divider()
         st.markdown(f"#### Esito — {result['name']}")
-        st.caption(f"Atteso: {result['expected']}")
+        profilo = ROLE_LABELS.get(result.get("role", ""), result.get("role", ""))
+        st.caption(f"Eseguito come **{profilo}** · atteso: {result['expected']}")
         st.code(result["question"], language=None)
         render_response(result["response"])
 

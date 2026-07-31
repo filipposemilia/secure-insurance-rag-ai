@@ -7,9 +7,11 @@ from __future__ import annotations
 
 import pytest
 
+from secure_rag.cli import SCENARIOS
 from secure_rag.config import Settings
 from secure_rag.ingestion import allowed_clearances, build_documents
 from secure_rag.rag import SecureRAGPipeline
+from secure_rag.security.guardrails import _numeri
 from secure_rag.uploads import process_upload
 from secure_rag.vectorstore import add_documents, index_documents
 
@@ -225,3 +227,46 @@ def test_la_citazione_del_motore_offline_non_e_troncata(pipeline: SecureRAGPipel
     riga_fonti = next(r for r in risposta.answer.splitlines() if r.startswith("Fonti:"))
     assert riga_fonti.count("[") == riga_fonti.count("]")
     assert ".md" in riga_fonti
+
+
+# ------------------------------------------- gli scenari aggiunti per la copertura OWASP
+
+
+def test_una_query_fuori_misura_non_raggiunge_il_modello(pipeline: SecureRAGPipeline):
+    """LLM04: su un'istanza esposta il denial of service è prima di tutto un problema di spesa."""
+    scenario = next(s for s in SCENARIOS if s.name.startswith("7."))
+
+    risposta = pipeline.answer(scenario.question, role=scenario.role)
+
+    assert risposta.blocked
+    assert risposta.input_verdict.rule == "lunghezza_anomala"
+    assert not risposta.prompt_sent, "nessun prompt composto: nessun token speso"
+
+
+def test_la_richiesta_di_agire_viene_fermata(pipeline: SecureRAGPipeline):
+    """LLM08: il sistema non ha strumenti, e la richiesta non arriva nemmeno al modello."""
+    scenario = next(s for s in SCENARIOS if s.name.startswith("8."))
+
+    risposta = pipeline.answer(scenario.question, role=scenario.role)
+
+    assert risposta.blocked
+    assert risposta.input_verdict.rule == "manipolazione_liquidazione"
+
+
+def test_una_domanda_fuori_dal_corpus_non_riceve_una_risposta_inventata(
+    pipeline: SecureRAGPipeline,
+):
+    """LLM09: il rischio non è che il sistema taccia, è che risponda in modo plausibile e falso.
+
+    L'asserzione è sulle **cifre**, non sulla formula di non-risposta: quest'ultima è comportamento
+    del modello in rete, mentre il motore offline — che serve la demo al raggiungimento del tetto di
+    spesa — risponde per sovrapposizione di parole e restituisce estratti attinenti. La proprietà
+    che vale con entrambi, ed è quella che conta in una polizza, è che nessun numero sia inventato.
+    """
+    scenario = next(s for s in SCENARIOS if s.name.startswith("9."))
+
+    risposta = pipeline.answer(scenario.question, role=scenario.role)
+
+    assert not risposta.blocked
+    inventate = _numeri(risposta.answer) - _numeri(risposta.prompt_sent)
+    assert not inventate, f"cifre non presenti nei documenti: {inventate}"

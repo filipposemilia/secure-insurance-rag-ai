@@ -17,6 +17,7 @@ from streamlit.testing.v1 import AppTest
 
 from secure_rag.config import get_settings
 from secure_rag.ingestion import build_documents
+from secure_rag.owasp import OWASP_RISKS
 from secure_rag.vectorstore import index_documents
 
 APP_PATH = "app/streamlit_app.py"
@@ -53,6 +54,21 @@ def run_app() -> AppTest:
     app = AppTest.from_file(APP_PATH, default_timeout=120)
     app.run()
     return app
+
+
+
+def esegui_scenario(app: AppTest, nome: str) -> AppTest:
+    """Preme «Esegui» dello scenario indicato, cercandolo per nome.
+
+    Le chiavi dei pulsanti contengono il codice OWASP e il nome dello scenario: selezionarli per
+    nome invece che per posizione tiene i test leggibili e li rende insensibili all'ordine con cui
+    i rischi compaiono nella scheda.
+    """
+    codice = next(
+        (r.codice for r in OWASP_RISKS if nome in r.scenari),
+        "base",  # il termine di paragone non appartiene ad alcun rischio
+    )
+    return app.button(key=f"esegui_{codice}_{nome}").click().run()
 
 
 def test_l_app_si_avvia_senza_eccezioni(indexed_app):
@@ -98,7 +114,7 @@ def test_lo_scenario_produce_l_esito_al_primo_click(indexed_app):
     trovava vuota.
     """
     app = run_app()
-    app.button(key="scenario_0").click().run()
+    esegui_scenario(app, "1. Query legittima")
 
     assert not app.exception
     assert "scenario_result" in app.session_state
@@ -114,7 +130,7 @@ def test_lo_scenario_usa_il_proprio_ruolo_non_quello_della_sidebar(indexed_app):
     app = run_app()
     assert app.selectbox[0].value == "agent", "il ruolo di partenza in sidebar è «agent»"
 
-    app.button(key="scenario_5").click().run()
+    esegui_scenario(app, "6. Stessa domanda con ruolo autorizzato")
     esito = app.session_state["scenario_result"]["response"]
 
     assert esito.role == "management"
@@ -124,10 +140,10 @@ def test_rbac_visibile_dal_confronto_fra_gli_scenari_5_e_6(indexed_app):
     """La stessa domanda, due clearance: la circolare riservata compare solo alla direzione."""
     app = run_app()
 
-    app.button(key="scenario_4").click().run()  # scenario 5 — ruolo agent
+    esegui_scenario(app, "5. Violazione RBAC (documento riservato alla direzione)")  # scenario 5 — ruolo agent
     agente = app.session_state["scenario_result"]["response"]
 
-    app.button(key="scenario_5").click().run()  # scenario 6 — ruolo management
+    esegui_scenario(app, "6. Stessa domanda con ruolo autorizzato")  # scenario 6 — ruolo management
     direzione = app.session_state["scenario_result"]["response"]
 
     assert agente.role == "agent"
@@ -136,9 +152,40 @@ def test_rbac_visibile_dal_confronto_fra_gli_scenari_5_e_6(indexed_app):
     assert "circolare_interna_liquidazioni.md" in direzione.sources
 
 
+
+def test_il_selettore_di_profilo_sovrascrive_il_ruolo_dello_scenario(indexed_app):
+    """L'altra faccia di ADR-012: il ruolo proprio è il default, non una gabbia.
+
+    Lo scenario 5 è pensato per l'agente e mostra un accesso negato. Cambiando profilo in
+    «Direzione Sinistri» la stessa domanda deve recuperare la circolare riservata: è la prova che il
+    selettore agisce sul retrieval e non sulla presentazione.
+    """
+    nome = "5. Violazione RBAC (documento riservato alla direzione)"
+    app = run_app()
+
+    app.selectbox(key=f"ruolo_LLM06_{nome}").select("management").run()
+    esegui_scenario(app, nome)
+
+    esito = app.session_state["scenario_result"]["response"]
+    assert esito.role == "management"
+    assert "circolare_interna_liquidazioni.md" in esito.sources
+
+
+def test_la_scheda_sicurezza_elenca_tutti_e_dieci_i_rischi(indexed_app):
+    """Chi prova la demo non apre docs/SECURITY.md: la copertura va vista dove si guarda."""
+    app = run_app()
+
+    testi = " ".join(m.value for m in app.markdown) + " ".join(c.value for c in app.caption)
+    for numero in range(1, 11):
+        assert f"LLM{numero:02d}" in testi, f"LLM{numero:02d} assente dalla scheda"
+
+    # I rischi non applicabili non devono avere un pulsante: sarebbero dimostrazioni di altro.
+    assert "Non applicabile a questo sistema" in testi
+
+
 def test_lo_scenario_di_injection_diretta_resta_bloccato_dalla_ui(indexed_app):
     app = run_app()
-    app.button(key="scenario_1").click().run()
+    esegui_scenario(app, "2. Prompt injection diretta")
 
     esito = app.session_state["scenario_result"]["response"]
     assert esito.blocked
@@ -220,7 +267,7 @@ def test_a_quota_esaurita_la_richiesta_non_raggiunge_il_modello(indexed_app, mon
     limiti(monkeypatch, per_ip="0")
     app = run_app()
 
-    app.button(key="scenario_0").click().run()
+    esegui_scenario(app, "1. Query legittima")
     esito = app.session_state["scenario_result"]["response"]
 
     assert esito.blocked
@@ -264,7 +311,7 @@ def test_il_provider_offline_non_consuma_quota(indexed_app, monkeypatch):
     app = run_app()
 
     for _ in range(4):
-        app.button(key="scenario_0").click().run()
+        esegui_scenario(app, "1. Query legittima")
 
     esito = app.session_state["scenario_result"]["response"]
     assert not esito.blocked
