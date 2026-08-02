@@ -50,9 +50,9 @@ Tre schede, pensate per essere proiettate durante una discussione tecnica:
   rimosse e di che tipo, confronto affiancato fra testo originale e testo anonimizzato (è il
   secondo che viene indicizzato e inviato all'LLM), e segnalazione dei blocchi che contengono
   istruzioni rivolte all'assistente.
-- **🛡️ Sicurezza** — i **dieci rischi OWASP Top 10 for LLM** con, dove esiste un attacco eseguibile,
-  un pulsante e un selettore di profilo; i **livelli di anonimizzazione**
-  attivi** su quell'istanza e l'audit trail in tabella.
+- **🛡️ Sicurezza** — i **dieci rischi OWASP Top 10 for LLM**: dove esiste un attacco eseguibile ci
+  sono un pulsante e un selettore di profilo, dove non esiste c'è il motivo. Più i livelli di
+  anonimizzazione attivi su quell'istanza e l'audit trail in tabella.
 
 I documenti caricati vivono in una **collection separata e isolata per sessione**, con clearance
 ereditata dal ruolo attivo: non contaminano il corpus aziendale, non sono raggiungibili dagli altri
@@ -62,6 +62,10 @@ il retrieval può raggiungere devono coincidere.
 
 ## Quickstart
 
+Serve **Python 3.12**: `chromadb` non ha ancora wheel per la 3.13, e `pyproject.toml` lo dichiara
+(`>=3.10,<3.13`). Nessuna API key è necessaria per provare — senza, il sistema usa il motore
+deterministico offline.
+
 ```bash
 uv venv --python 3.12
 uv pip install -e ".[dev]"
@@ -70,6 +74,7 @@ cp .env.example .env          # opzionale: aggiungi OPENAI_API_KEY per usare il 
 .venv/bin/secure-rag ingest         # anonimizza e indicizza
 .venv/bin/secure-rag ask "Qual è la franchigia della sezione cyber?"
 .venv/bin/secure-rag attack-demo    # i nove scenari di sicurezza
+.venv/bin/secure-rag audit          # le ultime righe dell'audit trail
 .venv/bin/streamlit run app/streamlit_app.py
 ```
 
@@ -179,6 +184,7 @@ src/secure_rag/
 ├── uploads.py             file caricati in sessione: limiti, masking, referto di sicurezza
 ├── vectorstore.py         ChromaDB + filtro RBAC sul retrieval
 ├── rag.py                 pipeline con i sette passi di controllo
+├── owasp.py               catalogo dei dieci rischi, mostrato dalla UI e verificato dai test
 ├── cli.py                 ingest · ask · attack-demo · audit
 └── security/
     ├── pii.py             livello 1: masking a regex, segnaposto stabili, categorie GDPR
@@ -192,6 +198,211 @@ app/streamlit_app.py       UI demo a schede: chat, upload documenti, sicurezza
 data/policies/             4 documenti sintetici, uno deliberatamente compromesso
 tests/                     170 test, nessuna chiamata di rete
 ```
+
+Circa **4.900 righe di codice** e **2.400 di test**: il rapporto è voluto, perché quasi tutto ciò che
+questo progetto afferma è una proprietà di sicurezza, e una proprietà che nessuno verifica è
+un'opinione.
+
+## Come è fatto
+
+La catena RAG è **una riga sola** — `self._chain = self._prompt | self._llm | StrOutputParser()` —
+e tutto il resto del codice sta attorno a quella riga. È lì che vivono le decisioni che vale la pena
+discutere. Le sezioni qui sotto si aprono una alla volta.
+
+<details>
+<summary><b>La pipeline: sette passi, e i guard fuori dalla catena</b></summary>
+
+<br>
+
+`SecureRAGPipeline.answer()` in `src/secure_rag/rag.py` è deliberatamente lineare e leggibile
+dall'alto in basso:
+
+```python
+# [1] Input guard: se scatta, non viene effettuata alcuna chiamata al modello.
+input_verdict = validate_input(question)
+if input_verdict.blocked:
+    return ...                      # 0 ms, 0 token
+
+# [2] Retrieval con filtro RBAC, sulle collection previste dallo scope.
+retrieved = self.retrieve(question, role, scope, upload_collection)
+
+# [3] Context guard: neutralizza la injection indiretta nascosta nei documenti.
+scan = scan_context(retrieved)
+
+# [4] Rete di sicurezza: i chunk dovrebbero già essere anonimizzati dall'ingestion.
+context = format_context(safe_documents, self._masker)
+
+# [5] Catena LCEL, e [6] output guard — che con lo streaming si intrecciano.
+# [7] Audit.
+```
+
+**La catena LangChain contiene solo il passo 5.** I controlli sono codice Python esplicito attorno,
+non `RunnableLambda` dentro la catena, per tre ragioni (ADR-003):
+
+1. **Devono poterla interrompere.** Se il guard fosse un anello, la richiesta sarebbe già in volo:
+   un'injection diretta costerebbe token. Così costa zero.
+2. **Si testano senza mockare l'LLM**: sono funzioni pure con input e output tipizzati.
+3. **Producono verdetti**, non eccezioni: l'audit trail ha bisogno di sapere *quale* regola è
+   scattata, non solo che qualcosa è andato storto.
+
+Due punti dell'ordine sono controintuitivi e vale la pena conoscerli:
+
+- **Il masking gira due volte**, in ingestion e sul contesto recuperato. Se un documento entrasse
+  nell'indice per una via che salta l'ingestion, il secondo passaggio lo intercetterebbe comunque.
+- **La de-pseudonimizzazione (6b) è dopo l'output guard, non prima.** Il guard verifica che il
+  modello non abbia *rigenerato* dati personali; ripristinarli prima glielo farebbe scattare addosso
+  ai segnaposto che abbiamo sostituito noi, bloccando risposte legittime e nascondendo il caso vero.
+
+</details>
+
+<details>
+<summary><b>Le cuciture: dove il sistema si estende senza riscriverlo</b></summary>
+
+<br>
+
+Quattro punti di innesto, ciascuno con una firma stretta. Sono la ragione per cui aggiungere il
+livello 2 dell'anonimizzazione non ha richiesto di toccare la pipeline.
+
+| Cucitura | Firma | Cosa permette |
+| :--- | :--- | :--- |
+| `NerEngine` (Protocol) | `analyze(text, threshold) -> list[NerSpan]` | Provare tutta l'integrazione del NER con un **doppio**, senza installare Presidio né scaricare un modello. Un terzo motore — l'LLM locale di ADR-019 — si aggancia qui |
+| `PIIMasker.mask()` | `mask(text) -> MaskingResult` | Sostituire il motore di anonimizzazione sotto, lasciando invariato tutto ciò che lo usa |
+| `get_chat_model()` | `(settings) -> BaseChatModel` | Il provider è **configurazione, non codice**: OpenAI, Azure, Ollama e il motore offline sono intercambiabili da `.env` |
+| `build_masker()` | `(settings) -> PIIMasker` | Punto **unico** di costruzione. Prima erano sette istanziazioni sparse, e sette posti dove dimenticarsi di attivare un livello |
+
+`NerEngine` è un `Protocol` e non una classe base astratta di proposito: il doppio dei test non deve
+ereditare da nulla, gli basta avere i metodi giusti.
+
+```python
+class NerEngine(Protocol):
+    @property
+    def available(self) -> bool: ...
+    @property
+    def model_name(self) -> str: ...
+    def analyze(self, text: str, threshold: float) -> list[NerSpan]: ...
+```
+
+**Le dipendenze pesanti sono opzionali con fallback dichiarato.** Presidio e `cryptography` si
+importano dentro un `try/except ImportError`, e quando mancano il sistema torna al comportamento
+ridotto **dicendolo** — nell'esito della CLI e in pagina — invece di far credere di aver fatto di
+più. È la stessa forma in `security/ner.py` e `security/vault.py`, ed è ciò che tiene la demo
+installabile in un minuto.
+
+</details>
+
+<details>
+<summary><b>I verdetti sono oggetti, non booleani</b></summary>
+
+<br>
+
+```python
+@dataclass
+class GuardVerdict:
+    allowed: bool
+    rule: str = ""        # "manipolazione_liquidazione"
+    reason: str = ""      # la frase mostrata all'utente
+    matches: list[str] = field(default_factory=list)
+```
+
+Un booleano direbbe che qualcosa è stato bloccato. `rule` e `matches` dicono **perché**, finiscono
+nell'audit trail e permettono a un revisore di ricostruire una decisione a mesi di distanza (ADR-004).
+Costa qualche riga di dataclass; è la differenza fra un log e una traccia.
+
+Lo stesso principio vale per l'audit: registra `query_hash`, non la domanda. Un log che conserva le
+query diventa a sua volta un archivio di dati personali.
+
+</details>
+
+<details>
+<summary><b>Lo streaming, con il guard interposto invece che successivo</b></summary>
+
+<br>
+
+Lo streaming normale rompe il controllo sull'output, ed è il motivo per cui in molti prodotti quel
+guard è di fatto decorativo: i token vanno in pagina appena il modello li produce, quindi **prima**
+di qualunque verifica. Toglierli dopo non li fa dimenticare a chi li ha visti.
+
+L'osservazione che scioglie il nodo: **i controlli non hanno bisogno della risposta intera.** Un
+codice fiscale e una cifra inventata si riconoscono su un frammento come sul testo completo. Serve
+non rilasciare mai un frammento prima di averlo verificato.
+
+```python
+guard = StreamingOutputGuard(context, self._masker)
+
+for chunk in self._chain.stream({"context": context, "question": question}):
+    consegna(guard.feed(chunk))     # restituisce solo testo già verificato
+    if guard.blocked:
+        break
+
+coda, verdetto = guard.close()
+```
+
+`feed()` accumula, **rivalida l'intero buffer** — non solo la parte nuova, o un pattern a cavallo di
+due frammenti sfuggirebbe a entrambe le verifiche — e rilascia per frasi. La parte che rende la
+garanzia strutturale invece che probabile:
+
+> **Gli ultimi 96 caratteri non escono mai.** La coda è più lunga del più esteso pattern riconosciuto,
+> quindi un dato personale è per intero nel buffer — e quindi già verificato — prima che il suo primo
+> carattere possa comparire.
+
+Un controllo resta a posteriori, ed è dichiarato: la soglia lessicale di groundedness ha senso solo
+sul testo completo, perché su tre parole qualunque rapporto è rumore. I due preventivi sono quelli
+che contano — dati personali e cifre non presenti nei documenti (ADR-023).
+
+</details>
+
+<details>
+<summary><b>Come è verificato</b></summary>
+
+<br>
+
+**170 test, nessuna chiamata di rete, una ventina di secondi.** Non per disciplina, ma perché il
+provider `fake` è un cittadino di prima classe e non un mock (ADR-006): embedding deterministici e un
+modello che estrae dal contesto le frasi pertinenti. La conseguenza è che la demo gira offline *e* i
+test girano ovunque.
+
+- **Doppi via Protocol.** `StubNer` in `tests/test_ner.py` implementa `NerEngine` e dichiara quali
+  entità «vede»: prova sostituzione, offset, soglie e vault senza modello linguistico. La firma
+  stretta del protocollo esiste proprio per rendere possibile questo doppio.
+- **La suite gira anche senza Presidio** — 167 test più 3 salti — verificato bloccando l'import con
+  un modulo che solleva `ImportError` messo davanti via `PYTHONPATH`. È la prova che la proprietà
+  «installabile in un minuto» non è un'intenzione.
+- **L'interfaccia è testata**, con `streamlit.testing.v1.AppTest`: cliccare uno scenario, cambiarne il
+  profilo, verificare che il documento riservato compaia fra le fonti solo per il ruolo autorizzato.
+  Non solo la libreria sotto.
+- **Il caso peggiore, non quello comodo**: il test dello streaming invia la risposta **un carattere
+  alla volta**, perché è lì che un guard incrementale si rompe.
+
+Il principio dietro le fixture, imparato a spese proprie: *un test che scrive dove non scrive
+l'applicazione resta verde su un sistema rotto.* Le fixture degli upload indicizzano nella collection
+**per sessione**, la stessa che usa l'interfaccia.
+
+</details>
+
+<details>
+<summary><b>Numeri misurati</b></summary>
+
+<br>
+
+Misurati su questa macchina, non stimati.
+
+| | Valore |
+| :--- | :--- |
+| Anonimizzazione livello 1 (regex) | **~0,7 ms** per documento |
+| Anonimizzazione livello 1+2 (con NER) | **~52 ms** per documento |
+| Memoria aggiunta dal modello NER | **+869 MB** di RSS, una volta sola per processo |
+| Immagine Docker con il livello 2 | **+~700 MB**, di cui 541 il solo modello |
+| Corpus | 4 documenti → **14 chunk** |
+| Parametri | `chunk_size` 800 · `overlap` 120 · `k` 4 · `MAX_QUERY_LENGTH` 1200 |
+| Blocco per injection diretta | **0 ms, 0 token** — non raggiunge il modello |
+
+Il NER costa settanta volte le regex e copre ciò che le regex non possono vedere: è la ragione per
+cui i due livelli sono affiancati con precedenza al primo, e non alternativi (ADR-020).
+
+</details>
+
+Il ragionamento completo dietro ogni scelta, con le alternative scartate, sta nei 24 ADR di
+**[docs/DECISIONS.md](docs/DECISIONS.md)**.
 
 ## Deploy
 
